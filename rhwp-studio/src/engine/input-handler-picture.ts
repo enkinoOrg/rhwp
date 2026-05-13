@@ -227,11 +227,16 @@ export function renderPictureObjectSelection(this: any): void {
 
           const bx = ctrl.x, by = ctrl.y, bw = ctrl.w, bh = ctrl.h;
 
-          // 회전각 조회 (shape만)
+          // 회전각 조회 (shape + image)
           let rotAngle = 0;
           if (ref.type === 'shape') {
             try {
               const props = this.wasm.getShapeProperties(ref.sec, ref.ppi, ref.ci);
+              rotAngle = (props.rotationAngle as number) ?? 0;
+            } catch { /* ignore */ }
+          } else if (ref.type === 'image') {
+            try {
+              const props = this.wasm.getPictureProperties(ref.sec, ref.ppi, ref.ci);
               rotAngle = (props.rotationAngle as number) ?? 0;
             } catch { /* ignore */ }
           }
