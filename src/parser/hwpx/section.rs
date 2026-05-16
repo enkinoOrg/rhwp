@@ -774,6 +774,8 @@ fn parse_table(
     // 표 기본 속성
     for attr in e.attributes().flatten() {
         match attr.key.as_ref() {
+            b"id" | b"instid" => table.common.instance_id = parse_u32(&attr),
+            b"zOrder" => table.common.z_order = parse_i32(&attr),
             b"rowCnt" => table.row_count = parse_u16(&attr),
             b"colCnt" => table.col_count = parse_u16(&attr),
             b"cellSpacing" => table.cell_spacing = parse_i16(&attr),
@@ -1258,6 +1260,9 @@ fn parse_picture(
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref ce)) if local_name(ce.name().as_ref()) == b"imgRect" => {
                 parse_picture_img_rect(reader, &mut border_x, &mut border_y)?;
+            }
+            Ok(Event::Start(ref ce)) if local_name(ce.name().as_ref()) == b"shapeComment" => {
+                common.description = read_dutmal_text(reader, b"shapeComment")?;
             }
             Ok(Event::Start(ref ce)) | Ok(Event::Empty(ref ce)) => {
                 let cname = ce.name();

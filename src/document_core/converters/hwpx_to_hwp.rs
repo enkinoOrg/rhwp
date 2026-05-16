@@ -16,6 +16,7 @@
 //!
 //! Stage 1 (현재): 진입점만 노출. 영역별 매핑은 Stage 2~ 에서 추가.
 
+use crate::model::bin_data::{BinDataStatus, BinDataType};
 use crate::model::control::Control;
 use crate::model::document::{Document, Section};
 use crate::model::paragraph::Paragraph;
@@ -57,6 +58,8 @@ pub struct AdapterReport {
     pub file_header_compression_normalized: u32,
     /// HWPX 출처 DocProperties.section_count 보정 횟수
     pub doc_properties_section_count_normalized: u32,
+    /// HWPX embedded BinData metadata 보정 횟수
+    pub bin_data_metadata_normalized: u32,
     /// `Control::SectionDef` 컨트롤 삽입 횟수 (Stage 4 — 섹션 개수)
     pub section_def_controls_inserted: u32,
 }
@@ -86,6 +89,7 @@ impl AdapterReport {
                 + self.border_fills_no_fill_normalized
                 + self.file_header_compression_normalized
                 + self.doc_properties_section_count_normalized
+                + self.bin_data_metadata_normalized
                 + self.section_def_controls_inserted)
                 > 0
     }
@@ -115,6 +119,7 @@ pub fn convert_hwpx_to_hwp_ir(doc: &mut Document) -> AdapterReport {
 
     normalize_file_header_for_hwp(doc, &mut report);
     normalize_doc_properties_for_hwp(doc, &mut report);
+    normalize_bin_data_for_hwp(doc, &mut report);
 
     // Stage 4: SectionDef 컨트롤 삽입 (HWPX 파서가 만들지 않으므로 직렬화기가 PAGE_DEF 출력 못 함)
     for section in &mut doc.sections {
@@ -131,6 +136,45 @@ pub fn convert_hwpx_to_hwp_ir(doc: &mut Document) -> AdapterReport {
     }
 
     report
+}
+
+/// HWPX embedded BinData를 한컴 HWP 저장 관례에 맞춰 materialize한다.
+///
+/// HWPX parser는 `content.hpf`의 BinData 항목을 모델에 등록하지만 HWP `BIN_DATA`
+/// record 전용 attr/status 값은 비워 둔다. 한컴 HWP 로더는 embedded image의
+/// `BIN_DATA` record에서 `attr=0x0101`, 접근 상태 success 형태를 기대하므로,
+/// HWP 저장 직전에 HWPX 출처 모델을 명시적으로 보정한다.
+fn normalize_bin_data_for_hwp(doc: &mut Document, report: &mut AdapterReport) {
+    let mut changed = false;
+
+    for bin_data in &mut doc.doc_info.bin_data_list {
+        if !matches!(
+            bin_data.data_type,
+            BinDataType::Embedding | BinDataType::Storage
+        ) {
+            continue;
+        }
+
+        if bin_data.attr != 0x0101 {
+            bin_data.attr = 0x0101;
+            changed = true;
+        }
+
+        if !matches!(bin_data.status, BinDataStatus::Success) {
+            bin_data.status = BinDataStatus::Success;
+            changed = true;
+        }
+
+        if bin_data.raw_data.is_some() {
+            bin_data.raw_data = None;
+            changed = true;
+        }
+    }
+
+    if changed {
+        report.bin_data_metadata_normalized += 1;
+        doc.doc_info.raw_stream_dirty = true;
+    }
 }
 
 /// HWPX 출처 문서를 HWP5 저장 관례에 맞춰 압축 문서로 보정한다.
@@ -370,14 +414,9 @@ fn adapt_table(table: &mut Table, report: &mut AdapterReport) {
                 table.raw_ctrl_data[2],
                 table.raw_ctrl_data[3],
             ]);
-            if materialize_hancom_table || materialize_tac_table {
-                if table.attr != packed {
-                    table.attr = packed;
-                    report.tables_attr_packed += 1;
-                }
-            } else {
-                table.raw_ctrl_data[0..4].copy_from_slice(&0u32.to_le_bytes());
-                table.attr = 0;
+            if table.attr != packed {
+                table.attr = packed;
+                report.tables_attr_packed += 1;
             }
         }
     }

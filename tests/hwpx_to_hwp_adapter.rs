@@ -6658,3 +6658,713 @@ fn task903_stage52_export_hwpx_h_01_after_parser_fix() {
     task903_stage52_write_generation_report(out_dir, bytes, pages, &hash);
     assert_eq!(pages, Some(9), "Stage52 rhwp 재로드 기준 9페이지 필요");
 }
+
+fn task903_stage53_current_impl_document(out_dir: &std::path::Path) -> Document {
+    let hwpx_bytes = load_sample("hwpx-h-01.hwpx");
+    let mut core = DocumentCore::from_bytes(&hwpx_bytes).expect("Stage53 HWPX 로드 실패");
+    let report = convert_hwpx_to_hwp_ir(core.document_mut());
+    eprintln!("[#903 Stage53] adapter report: {:?}", report);
+
+    let hwp_bytes =
+        rhwp::serializer::serialize_hwp(core.document()).expect("Stage53 current HWP 직렬화 실패");
+    assert!(
+        hwp_bytes.len() > 300_000,
+        "Stage53 current 산출물이 너무 작음: {} bytes",
+        hwp_bytes.len()
+    );
+
+    std::fs::write(out_dir.join("00_current_impl_baseline.hwp"), &hwp_bytes)
+        .expect("Stage53 current baseline 저장 실패");
+
+    let compressed = task903_file_header_flags(&hwp_bytes) & 0x01 != 0;
+    let mut doc = core.document().clone();
+    doc.doc_info.raw_stream = task903_read_decompressed_docinfo(&hwp_bytes, compressed);
+    doc.doc_info.raw_stream_dirty = false;
+    for section_idx in 0..doc.sections.len() {
+        let raw = task903_read_decompressed_section(&hwp_bytes, section_idx as u32, compressed)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Stage53 current section{} raw stream 읽기 실패",
+                    section_idx
+                )
+            });
+        doc.sections[section_idx].raw_stream = Some(raw);
+    }
+    task903_stage36_prepare_for_raw_bodytext(&mut doc);
+    doc.doc_info.raw_stream_dirty = false;
+    doc
+}
+
+fn task903_stage53_positive_document() -> Document {
+    task903_stage47_success_document()
+}
+
+fn task903_stage53_patch_docinfo_tags(doc: &mut Document, positive: &Document, tags: &[u32]) {
+    let target_raw = doc
+        .doc_info
+        .raw_stream
+        .as_ref()
+        .expect("Stage53 target DocInfo raw_stream 필요");
+    let positive_raw = positive
+        .doc_info
+        .raw_stream
+        .as_ref()
+        .expect("Stage53 positive DocInfo raw_stream 필요");
+    let patched = task903_graft_record_tags_by_index(target_raw, positive_raw, tags);
+    doc.doc_info.raw_stream = Some(patched);
+    doc.doc_info.raw_stream_dirty = false;
+    doc.header.compressed = true;
+    doc.header.flags |= 0x01;
+    doc.header.raw_data = None;
+}
+
+fn task903_stage53_patch_bindata(doc: &mut Document, positive: &Document) {
+    doc.doc_info.bin_data_list = positive.doc_info.bin_data_list.clone();
+    task903_stage53_patch_docinfo_tags(doc, positive, &[18]);
+}
+
+fn task903_stage53_patch_ctrl_header(doc: &mut Document, positive: &Document) {
+    task903_patch_section0_tags(doc, positive, &[71]);
+}
+
+fn task903_stage53_patch_parashape_vertical_bits(doc: &mut Document, positive: &Document) {
+    task903_stage51_patch_parashape_attr1_mask(doc, positive, 0x0030_0000);
+}
+
+fn task903_stage53_patch_parashape_full(doc: &mut Document, positive: &Document) {
+    task903_copy_para_shape_model_fields(doc, positive);
+    task903_stage53_patch_docinfo_tags(doc, positive, &[25]);
+}
+
+fn task903_stage53_write_probe(
+    out_dir: &std::path::Path,
+    name: &str,
+    doc: &Document,
+) -> (usize, Option<u32>, String) {
+    let hwp_bytes = rhwp::serializer::serialize_hwp(doc).expect("Stage53 HWP 직렬화 실패");
+    assert!(
+        hwp_bytes.len() > 300_000,
+        "{} 산출물이 너무 작음: {} bytes",
+        name,
+        hwp_bytes.len()
+    );
+    let hash = task903_short_hash(&hwp_bytes);
+    let out_path = out_dir.join(name);
+    std::fs::write(&out_path, &hwp_bytes).expect("Stage53 HWP 저장 실패");
+    let reloaded_pages = DocumentCore::from_bytes(&hwp_bytes)
+        .map(|core| core.page_count())
+        .ok();
+    eprintln!(
+        "[#903 Stage53] generated {} bytes={} hash={} rhwp_pages={:?}",
+        out_path.display(),
+        hwp_bytes.len(),
+        hash,
+        reloaded_pages
+    );
+    (hwp_bytes.len(), reloaded_pages, hash)
+}
+
+fn task903_stage53_docinfo_tag_counts(doc: &Document) -> std::collections::BTreeMap<u32, usize> {
+    doc.doc_info
+        .raw_stream
+        .as_ref()
+        .map(|raw| task903_stage49_count_records_by_tag(raw))
+        .unwrap_or_default()
+}
+
+fn task903_stage53_write_docinfo_report(
+    out_dir: &std::path::Path,
+    current: &Document,
+    positive: &Document,
+) {
+    use std::collections::BTreeSet;
+    use std::fmt::Write as _;
+
+    let current_raw = current
+        .doc_info
+        .raw_stream
+        .as_ref()
+        .expect("Stage53 current DocInfo raw_stream 필요");
+    let positive_raw = positive
+        .doc_info
+        .raw_stream
+        .as_ref()
+        .expect("Stage53 positive DocInfo raw_stream 필요");
+    let current_records = task903_parse_records(current_raw);
+    let positive_records = task903_parse_records(positive_raw);
+    let current_counts = task903_stage53_docinfo_tag_counts(current);
+    let positive_counts = task903_stage53_docinfo_tag_counts(positive);
+    let all_tags: BTreeSet<u32> = current_counts
+        .keys()
+        .chain(positive_counts.keys())
+        .copied()
+        .collect();
+
+    let mut report = String::new();
+    writeln!(report, "# Task m100 #903 Stage 53 DocInfo Gap Report").unwrap();
+    writeln!(report).unwrap();
+    writeln!(report, "## 1. 기준").unwrap();
+    writeln!(report).unwrap();
+    writeln!(
+        report,
+        "- current: Stage52 parser/adapter implementation output"
+    )
+    .unwrap();
+    writeln!(
+        report,
+        "- positive: `output/poc/hwpx2hwp/task903/stage40_table_min_leave_one_out/12_without_6596.hwp`"
+    )
+    .unwrap();
+    writeln!(report).unwrap();
+
+    writeln!(report, "## 2. Summary").unwrap();
+    writeln!(report).unwrap();
+    writeln!(report, "| item | current | positive |").unwrap();
+    writeln!(report, "|---|---:|---:|").unwrap();
+    writeln!(
+        report,
+        "| section_count | {} | {} |",
+        current.doc_properties.section_count, positive.doc_properties.section_count
+    )
+    .unwrap();
+    writeln!(
+        report,
+        "| bin_data model count | {} | {} |",
+        current.doc_info.bin_data_list.len(),
+        positive.doc_info.bin_data_list.len()
+    )
+    .unwrap();
+    writeln!(
+        report,
+        "| bin_data_content count | {} | {} |",
+        current.bin_data_content.len(),
+        positive.bin_data_content.len()
+    )
+    .unwrap();
+    writeln!(
+        report,
+        "| para_shape model count | {} | {} |",
+        current.doc_info.para_shapes.len(),
+        positive.doc_info.para_shapes.len()
+    )
+    .unwrap();
+    writeln!(
+        report,
+        "| DocInfo raw bytes | {} | {} |",
+        current_raw.len(),
+        positive_raw.len()
+    )
+    .unwrap();
+    writeln!(
+        report,
+        "| DocInfo record count | {} | {} |",
+        current_records.len(),
+        positive_records.len()
+    )
+    .unwrap();
+    writeln!(
+        report,
+        "| DocInfo hash | `{}` | `{}` |",
+        task903_short_hash(current_raw),
+        task903_short_hash(positive_raw)
+    )
+    .unwrap();
+    writeln!(report).unwrap();
+
+    writeln!(report, "## 3. DocInfo record counts").unwrap();
+    writeln!(report).unwrap();
+    writeln!(report, "| tag | name | current | positive |").unwrap();
+    writeln!(report, "|---:|---|---:|---:|").unwrap();
+    for tag in all_tags {
+        writeln!(
+            report,
+            "| {} | {} | {} | {} |",
+            tag,
+            task903_record_tag_name(tag),
+            current_counts.get(&tag).copied().unwrap_or(0),
+            positive_counts.get(&tag).copied().unwrap_or(0)
+        )
+        .unwrap();
+    }
+    writeln!(report).unwrap();
+
+    writeln!(report, "## 4. BIN_DATA model detail").unwrap();
+    writeln!(report).unwrap();
+    writeln!(
+        report,
+        "| idx | current raw | positive raw | current model | positive model |"
+    )
+    .unwrap();
+    writeln!(report, "|---:|---|---|---|---|").unwrap();
+    for idx in 0..current
+        .doc_info
+        .bin_data_list
+        .len()
+        .max(positive.doc_info.bin_data_list.len())
+    {
+        let current_bin = current.doc_info.bin_data_list.get(idx);
+        let positive_bin = positive.doc_info.bin_data_list.get(idx);
+        writeln!(
+            report,
+            "| {} | `{}` | `{}` | `{}` | `{}` |",
+            idx + 1,
+            current_bin
+                .and_then(|bin| bin.raw_data.as_deref())
+                .map(task903_hex_bytes)
+                .unwrap_or_else(|| "-".to_string()),
+            positive_bin
+                .and_then(|bin| bin.raw_data.as_deref())
+                .map(task903_hex_bytes)
+                .unwrap_or_else(|| "-".to_string()),
+            current_bin
+                .map(|bin| format!(
+                    "attr={:#x}, storage_id={}, ext={:?}, type={:?}, compression={:?}, status={:?}",
+                    bin.attr,
+                    bin.storage_id,
+                    bin.extension,
+                    bin.data_type,
+                    bin.compression,
+                    bin.status
+                ))
+                .unwrap_or_else(|| "-".to_string()),
+            positive_bin
+                .map(|bin| format!(
+                    "attr={:#x}, storage_id={}, ext={:?}, type={:?}, compression={:?}, status={:?}",
+                    bin.attr,
+                    bin.storage_id,
+                    bin.extension,
+                    bin.data_type,
+                    bin.compression,
+                    bin.status
+                ))
+                .unwrap_or_else(|| "-".to_string())
+        )
+        .unwrap();
+    }
+
+    std::fs::write(out_dir.join("current_vs_positive_docinfo.md"), report)
+        .expect("Stage53 DocInfo report 저장 실패");
+}
+
+fn task903_stage53_write_section0_report(
+    out_dir: &std::path::Path,
+    current: &Document,
+    positive: &Document,
+) {
+    use std::collections::BTreeMap;
+    use std::fmt::Write as _;
+
+    let current_raw = current.sections[0]
+        .raw_stream
+        .as_ref()
+        .expect("Stage53 current section0 raw_stream 필요");
+    let positive_raw = positive.sections[0]
+        .raw_stream
+        .as_ref()
+        .expect("Stage53 positive section0 raw_stream 필요");
+    let current_records = task903_parse_records(current_raw);
+    let positive_records = task903_parse_records(positive_raw);
+    let mut diff_counts: BTreeMap<u32, usize> = BTreeMap::new();
+    let mut focus_rows = Vec::new();
+    for idx in 0..current_records.len().min(positive_records.len()) {
+        let current_record = &current_records[idx];
+        let positive_record = &positive_records[idx];
+        let current_payload = &current_raw
+            [current_record.data_offset..current_record.data_offset + current_record.size];
+        let positive_payload = &positive_raw
+            [positive_record.data_offset..positive_record.data_offset + positive_record.size];
+        if current_record.tag != positive_record.tag
+            || current_record.level != positive_record.level
+            || current_payload != positive_payload
+        {
+            *diff_counts.entry(positive_record.tag).or_default() += 1;
+            if [66, 67, 68, 69, 71, 72, 77].contains(&positive_record.tag) {
+                focus_rows.push((
+                    idx,
+                    positive_record.tag,
+                    current_record.tag,
+                    positive_record.size,
+                    current_record.size,
+                    task903_first_diff(positive_payload, current_payload),
+                ));
+            }
+        }
+    }
+
+    let mut report = String::new();
+    writeln!(report, "# Task m100 #903 Stage 53 Section0 Gap Report").unwrap();
+    writeln!(report).unwrap();
+    writeln!(report, "## 1. Summary").unwrap();
+    writeln!(report).unwrap();
+    writeln!(report, "| item | current | positive |").unwrap();
+    writeln!(report, "|---|---:|---:|").unwrap();
+    writeln!(
+        report,
+        "| section0 bytes | {} | {} |",
+        current_raw.len(),
+        positive_raw.len()
+    )
+    .unwrap();
+    writeln!(
+        report,
+        "| section0 records | {} | {} |",
+        current_records.len(),
+        positive_records.len()
+    )
+    .unwrap();
+    writeln!(
+        report,
+        "| comparable differing records | {} | {} |",
+        diff_counts.values().sum::<usize>(),
+        diff_counts.values().sum::<usize>()
+    )
+    .unwrap();
+    writeln!(
+        report,
+        "| section0 hash | `{}` | `{}` |",
+        task903_short_hash(current_raw),
+        task903_short_hash(positive_raw)
+    )
+    .unwrap();
+    writeln!(report).unwrap();
+
+    writeln!(report, "## 2. Diff counts by tag").unwrap();
+    writeln!(report).unwrap();
+    writeln!(report, "| tag | name | differing records |").unwrap();
+    writeln!(report, "|---:|---|---:|").unwrap();
+    for (tag, count) in &diff_counts {
+        writeln!(
+            report,
+            "| {} | {} | {} |",
+            tag,
+            task903_record_tag_name(*tag),
+            count
+        )
+        .unwrap();
+    }
+    writeln!(report).unwrap();
+
+    writeln!(report, "## 3. Focus rows").unwrap();
+    writeln!(report).unwrap();
+    writeln!(
+        report,
+        "| idx | positive tag | current tag | positive size | current size | first diff |"
+    )
+    .unwrap();
+    writeln!(report, "|---:|---|---|---:|---:|---|").unwrap();
+    for (idx, positive_tag, current_tag, positive_size, current_size, first_diff) in focus_rows {
+        writeln!(
+            report,
+            "| {} | {}({}) | {}({}) | {} | {} | {} |",
+            idx,
+            task903_record_tag_name(positive_tag),
+            positive_tag,
+            task903_record_tag_name(current_tag),
+            current_tag,
+            positive_size,
+            current_size,
+            first_diff
+        )
+        .unwrap();
+    }
+
+    std::fs::write(out_dir.join("current_vs_positive_section0.md"), report)
+        .expect("Stage53 section0 report 저장 실패");
+}
+
+fn task903_stage53_write_vertical_bits_report(
+    out_dir: &std::path::Path,
+    current: &Document,
+    reference: &Document,
+    positive: &Document,
+) {
+    use std::collections::BTreeMap;
+    use std::fmt::Write as _;
+
+    let inventory = task903_stage52_collect_para_pr_inventory();
+    let current_rows: BTreeMap<usize, u32> = task903_stage52_docinfo_parashape_attr1(current)
+        .into_iter()
+        .collect();
+    let reference_rows: BTreeMap<usize, u32> = task903_stage52_docinfo_parashape_attr1(reference)
+        .into_iter()
+        .collect();
+    let positive_rows: BTreeMap<usize, u32> = task903_stage52_docinfo_parashape_attr1(positive)
+        .into_iter()
+        .collect();
+    let refs = task903_stage49_ref_stats(current);
+
+    let mut report = String::new();
+    writeln!(
+        report,
+        "# Task m100 #903 Stage 53 Current ParaShape Vertical Bits"
+    )
+    .unwrap();
+    writeln!(report).unwrap();
+    writeln!(
+        report,
+        "| id | referenced | HWPX vertical | expected bits | current bits | reference bits | positive bits | current attr1 | reference attr1 | positive attr1 |"
+    )
+    .unwrap();
+    writeln!(report, "|---:|---|---|---:|---:|---:|---:|---:|---:|---:|").unwrap();
+    for info in inventory {
+        let id = info.id;
+        let expected = task903_stage52_vertical_bits(&info.vertical);
+        let current_attr1 = current_rows.get(&id).copied().unwrap_or(0);
+        let reference_attr1 = reference_rows.get(&id).copied().unwrap_or(0);
+        let positive_attr1 = positive_rows.get(&id).copied().unwrap_or(0);
+        writeln!(
+            report,
+            "| {} | {} | `{}` | {} | {} | {} | {} | `{:#010x}` | `{:#010x}` | `{:#010x}` |",
+            id,
+            refs.para_shape_ids.contains(&(id as u16)),
+            info.vertical,
+            expected,
+            (current_attr1 >> 20) & 0x03,
+            (reference_attr1 >> 20) & 0x03,
+            (positive_attr1 >> 20) & 0x03,
+            current_attr1,
+            reference_attr1,
+            positive_attr1
+        )
+        .unwrap();
+    }
+
+    std::fs::write(out_dir.join("current_parashape_vertical_bits.md"), report)
+        .expect("Stage53 vertical bits report 저장 실패");
+}
+
+fn task903_stage53_write_generation_report(
+    out_dir: &std::path::Path,
+    rows: &[(&str, usize, Option<u32>, String)],
+) {
+    use std::fmt::Write as _;
+
+    let mut report = String::new();
+    writeln!(
+        report,
+        "# Task m100 #903 Stage 53 Current Implementation Gap Probe"
+    )
+    .unwrap();
+    writeln!(report).unwrap();
+    writeln!(report, "## 1. 생성 파일").unwrap();
+    writeln!(report).unwrap();
+    writeln!(report, "| variant | bytes | hash | rhwp reload |").unwrap();
+    writeln!(report, "|---|---:|---|---|").unwrap();
+    for (name, bytes, pages, hash) in rows {
+        writeln!(
+            report,
+            "| `{}` | {} | `{}` | {} |",
+            name,
+            bytes,
+            hash,
+            pages
+                .map(|v| format!("ok, pages={}", v))
+                .unwrap_or_else(|| "failed".to_string())
+        )
+        .unwrap();
+    }
+    writeln!(report).unwrap();
+
+    writeln!(report, "## 2. 작업지시자 판정표").unwrap();
+    writeln!(report).unwrap();
+    writeln!(
+        report,
+        "| variant | 한컴 판정 유형 | 이미지 출력 | 표/셀 배치 | 셀 텍스트 클리핑 | 마지막 페이지 출력 | rhwp-studio 판정 | 비고 |"
+    )
+    .unwrap();
+    writeln!(report, "|---|---|---|---|---|---|---|---|").unwrap();
+    for (name, _, _, _) in rows {
+        writeln!(
+            report,
+            "| {} |  |  |  |  |  |  |  |",
+            name.trim_end_matches(".hwp")
+        )
+        .unwrap();
+    }
+
+    std::fs::write(out_dir.join("stage53_generation.md"), report)
+        .expect("Stage53 generation report 저장 실패");
+}
+
+#[test]
+fn task903_stage53_generate_current_impl_gap_probe() {
+    let out_dir =
+        std::path::Path::new("output/poc/hwpx2hwp/task903/stage53_current_impl_gap_probe");
+    std::fs::create_dir_all(out_dir).expect("Stage53 output dir 생성 실패");
+
+    let current = task903_stage53_current_impl_document(out_dir);
+    let positive = task903_stage53_positive_document();
+    let reference = task903_load_hwp_document("samples/hwpx/hancom-hwp/hwpx-h-01.hwp")
+        .expect("Stage53 reference HWP 필요");
+
+    task903_stage53_write_docinfo_report(out_dir, &current, &positive);
+    task903_stage53_write_section0_report(out_dir, &current, &positive);
+    task903_stage53_write_vertical_bits_report(out_dir, &current, &reference, &positive);
+
+    type PatchFn = fn(&mut Document, &Document);
+    let variants: &[(&str, PatchFn)] = &[
+        ("01_current_plus_bindata.hwp", |doc, positive| {
+            task903_stage53_patch_bindata(doc, positive);
+        }),
+        ("02_current_plus_ctrl_header.hwp", |doc, positive| {
+            task903_stage53_patch_ctrl_header(doc, positive);
+        }),
+        (
+            "03_current_plus_bindata_ctrl_header.hwp",
+            |doc, positive| {
+                task903_stage53_patch_bindata(doc, positive);
+                task903_stage53_patch_ctrl_header(doc, positive);
+            },
+        ),
+        (
+            "04_current_plus_parashape_vertical_bits.hwp",
+            |doc, positive| {
+                task903_stage53_patch_parashape_vertical_bits(doc, positive);
+            },
+        ),
+        (
+            "05_current_plus_bindata_ctrl_header_vertical_bits.hwp",
+            |doc, positive| {
+                task903_stage53_patch_bindata(doc, positive);
+                task903_stage53_patch_ctrl_header(doc, positive);
+                task903_stage53_patch_parashape_vertical_bits(doc, positive);
+            },
+        ),
+        ("06_current_plus_parashape_full.hwp", |doc, positive| {
+            task903_stage53_patch_parashape_full(doc, positive);
+        }),
+        (
+            "07_current_plus_bindata_ctrl_header_parashape_full.hwp",
+            |doc, positive| {
+                task903_stage53_patch_bindata(doc, positive);
+                task903_stage53_patch_ctrl_header(doc, positive);
+                task903_stage53_patch_parashape_full(doc, positive);
+            },
+        ),
+    ];
+
+    let mut rows = Vec::new();
+    for (name, patch) in variants {
+        let mut doc = current.clone();
+        patch(&mut doc, &positive);
+        let (bytes, pages, hash) = task903_stage53_write_probe(out_dir, name, &doc);
+        rows.push((*name, bytes, pages, hash));
+    }
+    task903_stage53_write_generation_report(out_dir, &rows);
+}
+
+fn task903_stage54_candidate_document(
+    out_dir: &std::path::Path,
+) -> (Document, usize, Option<u32>, String) {
+    let hwpx_bytes = load_sample("hwpx-h-01.hwpx");
+    let mut core = DocumentCore::from_bytes(&hwpx_bytes).expect("Stage54 HWPX 로드 실패");
+    let report = convert_hwpx_to_hwp_ir(core.document_mut());
+    eprintln!("[#903 Stage54] adapter report: {:?}", report);
+
+    let hwp_bytes =
+        rhwp::serializer::serialize_hwp(core.document()).expect("Stage54 HWP 직렬화 실패");
+    assert!(
+        hwp_bytes.len() > 300_000,
+        "Stage54 산출물이 너무 작음: {} bytes",
+        hwp_bytes.len()
+    );
+
+    let out_path = out_dir.join("hwpx-h-01.hwp");
+    std::fs::write(&out_path, &hwp_bytes).expect("Stage54 HWP 저장 실패");
+
+    let reloaded_pages = DocumentCore::from_bytes(&hwp_bytes)
+        .map(|core| core.page_count())
+        .ok();
+    let hash = task903_short_hash(&hwp_bytes);
+    eprintln!(
+        "[#903 Stage54] generated {} bytes={} hash={} rhwp_pages={:?}",
+        out_path.display(),
+        hwp_bytes.len(),
+        hash,
+        reloaded_pages
+    );
+
+    let compressed = task903_file_header_flags(&hwp_bytes) & 0x01 != 0;
+    let mut doc = core.document().clone();
+    doc.doc_info.raw_stream = task903_read_decompressed_docinfo(&hwp_bytes, compressed);
+    doc.doc_info.raw_stream_dirty = false;
+    for section_idx in 0..doc.sections.len() {
+        let raw = task903_read_decompressed_section(&hwp_bytes, section_idx as u32, compressed)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Stage54 candidate section{} raw stream 읽기 실패",
+                    section_idx
+                )
+            });
+        doc.sections[section_idx].raw_stream = Some(raw);
+    }
+    task903_stage36_prepare_for_raw_bodytext(&mut doc);
+    doc.doc_info.raw_stream_dirty = false;
+
+    (doc, hwp_bytes.len(), reloaded_pages, hash)
+}
+
+fn task903_stage54_write_generation_report(
+    out_dir: &std::path::Path,
+    bytes: usize,
+    pages: Option<u32>,
+    hash: &str,
+) {
+    use std::fmt::Write as _;
+
+    let mut report = String::new();
+    writeln!(
+        report,
+        "# Task m100 #903 Stage 54 Minimal Implementation Candidate"
+    )
+    .unwrap();
+    writeln!(report).unwrap();
+    writeln!(report, "## 1. 생성 파일").unwrap();
+    writeln!(report).unwrap();
+    writeln!(report, "| file | bytes | hash | rhwp reload |").unwrap();
+    writeln!(report, "|---|---:|---|---|").unwrap();
+    writeln!(
+        report,
+        "| `hwpx-h-01.hwp` | {} | `{}` | {} |",
+        bytes,
+        hash,
+        pages
+            .map(|v| format!("ok, pages={}", v))
+            .unwrap_or_else(|| "failed".to_string())
+    )
+    .unwrap();
+    writeln!(report).unwrap();
+
+    writeln!(report, "## 2. 작업지시자 판정표").unwrap();
+    writeln!(report).unwrap();
+    writeln!(
+        report,
+        "| 파일 | 한컴 판정 유형 | 이미지 출력 | 표/셀 배치 | 셀 텍스트 클리핑 | 마지막 페이지 출력 | rhwp-studio 판정 | 비고 |"
+    )
+    .unwrap();
+    writeln!(report, "|---|---|---|---|---|---|---|---|").unwrap();
+    writeln!(
+        report,
+        "| `output/poc/hwpx2hwp/task903/stage54_minimal_impl_candidate/hwpx-h-01.hwp` |  |  |  |  |  |  |  |"
+    )
+    .unwrap();
+
+    std::fs::write(out_dir.join("stage54_generation.md"), report)
+        .expect("Stage54 generation report 저장 실패");
+}
+
+#[test]
+fn task903_stage54_generate_minimal_impl_candidate() {
+    let out_dir =
+        std::path::Path::new("output/poc/hwpx2hwp/task903/stage54_minimal_impl_candidate");
+    std::fs::create_dir_all(out_dir).expect("Stage54 output dir 생성 실패");
+
+    let (candidate, bytes, pages, hash) = task903_stage54_candidate_document(out_dir);
+    let positive = task903_stage53_positive_document();
+
+    task903_stage53_write_docinfo_report(out_dir, &candidate, &positive);
+    task903_stage53_write_section0_report(out_dir, &candidate, &positive);
+    task903_stage54_write_generation_report(out_dir, bytes, pages, &hash);
+
+    assert_eq!(pages, Some(9), "Stage54 rhwp 재로드 기준 9페이지 필요");
+}
