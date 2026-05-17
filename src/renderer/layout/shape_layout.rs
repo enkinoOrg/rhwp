@@ -1196,13 +1196,20 @@ impl LayoutEngine {
             height: (h - margin_top - margin_bottom).max(0.0),
         };
 
-        // [Task #874 #3] shortcut.hwp 1 페이지 우측하단 자동번호 "1" 시각 정합:
-        // 도형이 원본 (sa.original_*) 대비 1.5× 이상 확대된 경우 한컴은 글상자 내부
-        // 글꼴 크기를 (original / current) 비율로 축소 렌더링한다. base_size 가 25400
-        // (254 pt) 인 마스터 페이지 글상자가 현재 좌표계에서 그대로 339 px 로 그려지면,
-        // 본문 우측 단축키 (지우기 Ctrl+BackSpace / Ctrl+Y / Alt+Y) 행 위에 자동번호의
-        // 상단이 광범위하게 겹친다 (한컴 PDF 정합 불일치). render_sx/sy ≠ 1.0 (즉
-        // current ≠ original) 일 때만 동작하므로 일반 글상자에는 영향 없음.
+        // [Task #874 #3 / #930] shortcut.hwp 1 페이지 우측하단 자동번호 "1" 시각 정합:
+        // 도형이 원본 (sa.original_*) 대비 확대된 마스터 페이지 글상자는 한컴이 내부
+        // 글꼴을 축소 렌더링한다. base_size 가 25400 (254 pt) 인 자동번호 글상자가 현재
+        // 좌표계에서 그대로 339 px 로 그려지면 본문 우측 단축키 행과 겹친다.
+        //
+        // [#930] 발동 조건을 두 축 모두 1.5× 초과 (= min_ratio > 1.5, 등방 확대) 로
+        // 좁힌다. table-in-tbox.hwp 2 페이지처럼 한 축만 강하게 늘어난 이방 확��
+        // 글상자 (sx≈1.07, sy≈8.2) 는 내부 문단이 이미 current 박스 기준으로 조판된
+        // 일반 본문이므로 축소하면 안 된다 (글꼴이 1/8 로 깨짐).
+        //
+        // [#930] 축소 계수는 2.0 / max_ratio. #874 의 1.0 / max_ratio 는 한컴 2022
+        // PDF 측정 대비 자동번호를 약 2× 과축소했다 (글리프 93 px vs PDF 187 px).
+        // 단일 샘플 (shortcut.hwp 자동번호) 기반 경험적 보정이므로, 다른 등방 확대
+        // 글상자 샘플이 확보되면 재검증한다.
         let sa = &drawing.shape_attr;
         let local_styles_scaled: Option<ResolvedStyleSet> = {
             let sw_ratio = if sa.original_width > 0 && sa.current_width > 0 {
@@ -1212,14 +1219,15 @@ impl LayoutEngine {
                 sa.current_height as f64 / sa.original_height as f64
             } else { 1.0 };
             let max_ratio = sw_ratio.max(sh_ratio);
+            let min_ratio = sw_ratio.min(sh_ratio);
             // [Task #928] 인라인 도형 (treat_as_char=true) 은 폰트 자동 축소 적용 안 함.
             // exam_kor 5p 다이어그램의 사각형 [A 단계] 가 original=(2925, 975) HU →
             // current=(6518, 1983) HU 로 2.2배 확대된 채 IR 인코딩되어 있으나 한컴은
             // 폰트를 11.5pt 그대로 유지한다. 본 ratio 축소 (#874 #3) 가 잘못 발동하여
             // 폰트가 6.88px 로 축소되던 회귀를 차단. shortcut.hwp 마스터 페이지
             // 글상자는 tac=false 라 ratio 적용 유지.
-            if max_ratio > 1.5 && !parent_treat_as_char {
-                let inv = (1.0 / max_ratio).min(1.0);
+            if min_ratio > 1.5 && !parent_treat_as_char {
+                let inv = (2.0 / max_ratio).min(1.0);
                 let mut local = styles.clone();
                 for cs in local.char_styles.iter_mut() {
                     cs.font_size *= inv;
