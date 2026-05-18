@@ -49,7 +49,11 @@ fn path_tuples(hit: &Value) -> Vec<(usize, usize, usize)> {
 
 /// hit_test 결과가 (parent_para, control_index) 외곽 표에 안착했는지 + 셀 path 가 비어있지 않은지 검증.
 fn assert_table_hit(hit: &Value, parent_para: u64, control: u64) {
-    assert_eq!(hit["sectionIndex"].as_u64(), Some(0), "section must be 0, hit={hit}");
+    assert_eq!(
+        hit["sectionIndex"].as_u64(),
+        Some(0),
+        "section must be 0, hit={hit}"
+    );
     assert_eq!(
         hit["parentParaIndex"].as_u64(),
         Some(parent_para),
