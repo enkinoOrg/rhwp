@@ -1043,7 +1043,14 @@ impl TypesetEngine {
 
             if !has_table {
                 // --- 핵심: format → fits → place/split ---
-                let formatted = self.format_paragraph(para, composed.get(para_idx), styles);
+                let col_w = st
+                    .layout
+                    .column_areas
+                    .get(st.current_column as usize)
+                    .map(|a| a.width)
+                    .unwrap_or(st.layout.body_area.width);
+                let formatted =
+                    self.format_paragraph(para, composed.get(para_idx), styles, Some(col_w));
                 let is_last_in_section = para_idx + 1 == paragraphs.len();
                 // [Task #1027 Stage D] fit 직전 vpos 스냅으로 누적 drift 제거 (렌더러 정합).
                 self.vpos_snap_current_height(&mut st, para_idx, paragraphs, styles);
@@ -1434,7 +1441,18 @@ impl TypesetEngine {
                             st.endnote_paragraphs.push(en_para_copy);
 
                             let composed = crate::renderer::composer::compose_paragraph(en_para);
-                            let fmt = self.format_paragraph(en_para, Some(&composed), &styles);
+                            let en_col_w = st
+                                .layout
+                                .column_areas
+                                .get(st.current_column as usize)
+                                .map(|a| a.width)
+                                .unwrap_or(st.layout.body_area.width);
+                            let fmt = self.format_paragraph(
+                                en_para,
+                                Some(&composed),
+                                &styles,
+                                Some(en_col_w),
+                            );
                             let available = st.available_height();
 
                             // [Task #1062] 다단 미주 누적/판정을 렌더러 vpos 전진과 통일.
@@ -1570,9 +1588,38 @@ impl TypesetEngine {
         para: &Paragraph,
         composed: Option<&ComposedParagraph>,
         styles: &ResolvedStyleSet,
+        column_width_px: Option<f64>,
     ) -> FormattedParagraph {
         let para_style_id = composed.map(|c| c.para_style_id as usize).unwrap_or(0);
         let para_style = styles.para_styles.get(para_style_id);
+
+        // [Task #1042 Stage 6c] line_segs.empty paragraph 의 typeset/layout 측정 정합 —
+        // paragraph_layout (렌더링 path) 는 Stage 6b 에서 recompose_for_cell_width 로 column
+        // 기반 wrap 을 적용하지만, format_paragraph (typeset/measurement path) 는 원본
+        // compose_lines fallback (CHARS_PER_LINE=45) 결과로 측정 → 두 path 의 line_count 불일치
+        // 발생 (e.g. sample16 변환기 pi=417: typeset 2 lines / layout 1 line, +10.4 px gap).
+        // 동일 recompose 를 typeset 측에도 적용해 paragraph height 측정 정합.
+        let recomposed: Option<ComposedParagraph> = match (composed, column_width_px) {
+            (Some(c), Some(cw)) if para.line_segs.is_empty() && cw > 0.0 => {
+                let margin_l = para_style.map(|s| s.margin_left).unwrap_or(0.0);
+                let margin_r = para_style.map(|s| s.margin_right).unwrap_or(0.0);
+                let inner = (cw - margin_l - margin_r).max(0.0);
+                if inner > 0.0 {
+                    let mut cloned = c.clone();
+                    crate::renderer::composer::recompose_for_cell_width(
+                        &mut cloned,
+                        para,
+                        inner,
+                        styles,
+                    );
+                    Some(cloned)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        let composed = recomposed.as_ref().or(composed);
         let raw_spacing_before = para_style.map(|s| s.spacing_before).unwrap_or(0.0);
         let spacing_after = para_style.map(|s| s.spacing_after).unwrap_or(0.0);
 
@@ -1629,22 +1676,23 @@ impl TypesetEngine {
                         })
                         .fold(0.0f64, f64::max);
                     let recompute_lh = max_fs > 0.0 && raw_lh < max_fs;
-                    let lh = if recompute_lh {
+                    let (lh, line_spacing_px) = if recompute_lh {
+                        // [Task #1042 Stage 6c] HWP3/HWP5 line_segs 의 (line_height=base,
+                        // line_spacing=extra) 의미와 정합되게 분해 — 종전 처럼 ls_val/100 전체를
+                        // line_height 에 baking 하고 line_spacing_px=0 으로 두면 trailing_ls 제거
+                        // 효과 (height_for_fit) 가 line_segs 있는 path 와 어긋남.
                         use crate::model::style::LineSpacingType;
-                        let computed = match ls_type {
-                            LineSpacingType::Percent => max_fs * ls_val / 100.0,
-                            LineSpacingType::Fixed => ls_val.max(max_fs),
-                            LineSpacingType::SpaceOnly => max_fs + ls_val,
-                            LineSpacingType::Minimum => ls_val.max(max_fs),
-                        };
-                        computed.max(max_fs)
+                        match ls_type {
+                            LineSpacingType::Percent => {
+                                let extra = (max_fs * (ls_val - 100.0) / 100.0).max(0.0);
+                                (max_fs, extra)
+                            }
+                            LineSpacingType::Fixed => (ls_val.max(max_fs), 0.0),
+                            LineSpacingType::SpaceOnly => (max_fs, ls_val.max(0.0)),
+                            LineSpacingType::Minimum => (ls_val.max(max_fs), 0.0),
+                        }
                     } else {
-                        raw_lh
-                    };
-                    let line_spacing_px = if recompute_lh {
-                        0.0
-                    } else {
-                        hwpunit_to_px(line.line_spacing, self.dpi)
+                        (raw_lh, hwpunit_to_px(line.line_spacing, self.dpi))
                     };
                     (lh, line_spacing_px)
                 })
@@ -2297,7 +2345,13 @@ impl TypesetEngine {
         _page_def: &PageDef,
     ) {
         // 호스트 문단 format (TAC 표의 높이 보정용)
-        let fmt = self.format_paragraph(para, composed, styles);
+        let host_col_w = st
+            .layout
+            .column_areas
+            .get(st.current_column as usize)
+            .map(|a| a.width)
+            .unwrap_or(st.layout.body_area.width);
+        let fmt = self.format_paragraph(para, composed, styles, Some(host_col_w));
 
         // TAC 표 카운트 및 플러시 판단
         let tac_count = para

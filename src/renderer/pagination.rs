@@ -657,7 +657,15 @@ impl Paginator {
     ) -> (PaginationResult, MeasuredSection) {
         // === 1-패스: 높이 사전 측정 ===
         let measurer = HeightMeasurer::new(self.dpi);
-        let measured = measurer.measure_section(paragraphs, composed, styles);
+        let layout = crate::renderer::page_layout::PageLayoutInfo::from_page_def(
+            page_def, column_def, self.dpi,
+        );
+        let col_w = layout
+            .column_areas
+            .first()
+            .map(|a| a.width)
+            .unwrap_or(layout.body_area.width);
+        let measured = measurer.measure_section(paragraphs, composed, styles, Some(col_w));
 
         // === 2-패스: 측정된 높이로 페이지 분할 ===
         let result = self.paginate_with_measured(

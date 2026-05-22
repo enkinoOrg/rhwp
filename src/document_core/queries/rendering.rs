@@ -1429,6 +1429,7 @@ impl DocumentCore {
                 &default_section.paragraphs,
                 &empty_composed,
                 &self.styles,
+                None,
             );
             let result = paginator.paginate_with_measured(
                 &default_section.paragraphs,
@@ -1533,15 +1534,43 @@ impl DocumentCore {
                     .dirty_paragraphs
                     .get(idx)
                     .and_then(|opt| opt.as_deref());
+                let column_def_sel = Self::find_initial_column_def(&section.paragraphs);
+                let layout_sel = crate::renderer::page_layout::PageLayoutInfo::from_page_def(
+                    &section.section_def.page_def,
+                    &column_def_sel,
+                    self.dpi,
+                );
+                let col_w_sel = layout_sel
+                    .column_areas
+                    .first()
+                    .map(|a| a.width)
+                    .unwrap_or(layout_sel.body_area.width);
                 measurer.measure_section_selective(
                     &section.paragraphs,
                     composed,
                     &self.styles,
                     &self.measured_sections[idx],
                     dirty_paras,
+                    Some(col_w_sel),
                 )
             } else {
-                measurer.measure_section(&section.paragraphs, composed, &self.styles)
+                let column_def_pre = Self::find_initial_column_def(&section.paragraphs);
+                let layout_pre = crate::renderer::page_layout::PageLayoutInfo::from_page_def(
+                    &section.section_def.page_def,
+                    &column_def_pre,
+                    self.dpi,
+                );
+                let col_w_pre = layout_pre
+                    .column_areas
+                    .first()
+                    .map(|a| a.width)
+                    .unwrap_or(layout_pre.body_area.width);
+                measurer.measure_section(
+                    &section.paragraphs,
+                    composed,
+                    &self.styles,
+                    Some(col_w_pre),
+                )
             };
 
             let column_def = Self::find_initial_column_def(&section.paragraphs);

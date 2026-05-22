@@ -172,11 +172,16 @@ impl HeightMeasurer {
     }
 
     /// 구역의 모든 콘텐츠 높이를 측정한다.
+    ///
+    /// `column_width_px`: 단 너비 (px). `Some` 이면 line_segs.empty paragraph 의
+    /// compose_lines fallback 결과를 단 너비 기반으로 recompose 하여 측정한다
+    /// (Task #1042 Stage 6c: typeset/layout 측정 정합).
     pub fn measure_section(
         &self,
         paragraphs: &[Paragraph],
         composed: &[ComposedParagraph],
         styles: &ResolvedStyleSet,
+        column_width_px: Option<f64>,
     ) -> MeasuredSection {
         let mut measured_paras = Vec::with_capacity(paragraphs.len());
         let mut measured_tables = Vec::new();
@@ -206,6 +211,7 @@ impl HeightMeasurer {
                 has_table,
                 has_picture,
                 picture_height,
+                column_width_px,
             );
             measured_paras.push(measured);
 
@@ -234,12 +240,37 @@ impl HeightMeasurer {
         has_table: bool,
         has_picture: bool,
         picture_height: f64,
+        column_width_px: Option<f64>,
     ) -> MeasuredParagraph {
         // 문단 스타일에서 spacing 조회
         let para_style_id = composed.map(|c| c.para_style_id as usize).unwrap_or(0);
         let para_style = styles.para_styles.get(para_style_id);
         let spacing_before = para_style.map(|s| s.spacing_before).unwrap_or(0.0);
         let spacing_after = para_style.map(|s| s.spacing_after).unwrap_or(0.0);
+
+        // [Task #1042 Stage 6c] line_segs.empty paragraph 의 compose_lines fallback
+        // 결과를 단 너비 기반으로 recompose — paragraph_layout (Stage 6b) 와 동일.
+        let recomposed: Option<ComposedParagraph> = match (composed, column_width_px) {
+            (Some(c), Some(cw)) if para.line_segs.is_empty() && cw > 0.0 => {
+                let margin_l = para_style.map(|s| s.margin_left).unwrap_or(0.0);
+                let margin_r = para_style.map(|s| s.margin_right).unwrap_or(0.0);
+                let inner = (cw - margin_l - margin_r).max(0.0);
+                if inner > 0.0 {
+                    let mut cloned = c.clone();
+                    crate::renderer::composer::recompose_for_cell_width(
+                        &mut cloned,
+                        para,
+                        inner,
+                        styles,
+                    );
+                    Some(cloned)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        let composed = recomposed.as_ref().or(composed);
 
         // 줄별 높이 계산: 콘텐츠 높이(line_height)와 줄간격(line_spacing)을 분리 저장
         // line_height = 줄의 콘텐츠 영역 높이
@@ -269,9 +300,25 @@ impl HeightMeasurer {
                                 .unwrap_or(0.0)
                         })
                         .fold(0.0f64, f64::max);
-                    let lh =
-                        crate::renderer::corrected_line_height(raw_lh, max_fs, ls_type, ls_val);
-                    (lh, hwpunit_to_px(line.line_spacing, self.dpi))
+                    // [Task #1042 Stage 6c] line_segs.empty path (raw_lh < max_fs) 의 lh/ls
+                    // 분해 — HWP3/HWP5 line_segs 의 (line_height=base, line_spacing=extra)
+                    // 의미와 정합. 종전 처럼 ls_val/100 전체를 line_height 에 baking 하면
+                    // trailing_ls 제거 효과가 line_segs 있는 path 와 어긋남.
+                    if max_fs > 0.0 && raw_lh < max_fs {
+                        use crate::model::style::LineSpacingType;
+                        let (base, extra) = match ls_type {
+                            LineSpacingType::Percent => {
+                                let e = (max_fs * (ls_val - 100.0) / 100.0).max(0.0);
+                                (max_fs, e)
+                            }
+                            LineSpacingType::Fixed => (ls_val.max(max_fs), 0.0),
+                            LineSpacingType::SpaceOnly => (max_fs, ls_val.max(0.0)),
+                            LineSpacingType::Minimum => (ls_val.max(max_fs), 0.0),
+                        };
+                        (base, extra)
+                    } else {
+                        (raw_lh, hwpunit_to_px(line.line_spacing, self.dpi))
+                    }
                 })
                 .unzip()
         } else if !para.line_segs.is_empty() {
@@ -1210,6 +1257,7 @@ impl HeightMeasurer {
         composed: &[ComposedParagraph],
         styles: &ResolvedStyleSet,
         prev_measured: &MeasuredSection,
+        column_width_px: Option<f64>,
     ) -> MeasuredSection {
         let mut measured_paras = Vec::with_capacity(paragraphs.len());
         let mut measured_tables = Vec::new();
@@ -1236,6 +1284,7 @@ impl HeightMeasurer {
                 has_table,
                 has_picture,
                 picture_height,
+                column_width_px,
             );
             measured_paras.push(measured);
 
@@ -1269,6 +1318,7 @@ impl HeightMeasurer {
         styles: &ResolvedStyleSet,
         prev_measured: &MeasuredSection,
         dirty_paras: Option<&[bool]>,
+        column_width_px: Option<f64>,
     ) -> MeasuredSection {
         let dirty_bits = match dirty_paras {
             Some(bits) => bits,
@@ -1279,6 +1329,7 @@ impl HeightMeasurer {
                     composed,
                     styles,
                     prev_measured,
+                    column_width_px,
                 );
             }
         };
@@ -1333,6 +1384,7 @@ impl HeightMeasurer {
                 has_table,
                 has_picture,
                 picture_height,
+                column_width_px,
             );
             measured_paras.push(measured);
 
@@ -1883,7 +1935,7 @@ mod tests {
         let composed: Vec<ComposedParagraph> = Vec::new();
         let styles = ResolvedStyleSet::default();
 
-        let result = measurer.measure_section(&paragraphs, &composed, &styles);
+        let result = measurer.measure_section(&paragraphs, &composed, &styles, None);
         assert!(result.paragraphs.is_empty());
         assert!(result.tables.is_empty());
     }
@@ -1901,7 +1953,7 @@ mod tests {
         let composed: Vec<ComposedParagraph> = Vec::new();
         let styles = ResolvedStyleSet::default();
 
-        let result = measurer.measure_section(&paragraphs, &composed, &styles);
+        let result = measurer.measure_section(&paragraphs, &composed, &styles, None);
         assert_eq!(result.paragraphs.len(), 1);
         assert!(result.paragraphs[0].total_height > 0.0);
     }
