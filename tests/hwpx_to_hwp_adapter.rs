@@ -95,7 +95,7 @@ fn baseline_diff_inventory_hwpx_h_01() {
         *c > 0
             && (*a == "table.raw_ctrl_data"
                 || *a == "paragraph.line_seg.vertical_pos"
-                || *a == "cell.list_attr.bit16")
+                || *a == "cell.list_header_width_ref.bit0")
     });
     assert!(
         interesting,
@@ -324,8 +324,8 @@ fn task888_basic_table_materializes_hancom_table_attrs() {
     assert_eq!(report.table_ctrl_header_attr_materialized, 1);
     assert_eq!(report.table_record_attr_materialized, 1);
     assert_eq!(
-        table.raw_table_record_attr, 0x0000_0006,
-        "HWPX table record attr는 pageBreak/repeatHeader/noAdjust 계약 필드로 재구성한다"
+        table.raw_table_record_attr, 0x0400_0006,
+        "HWPX table record attr는 pageBreak/repeatHeader/noAdjust와 안쪽 여백 활성 계약 필드로 재구성한다"
     );
     assert_eq!(report.table_record_row_sizes_materialized, 1);
     assert_eq!(table.row_sizes, vec![4, 4, 4]);

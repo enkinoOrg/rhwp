@@ -1074,7 +1074,11 @@ fn parse_table(
             b"pageBreak" => {
                 let val = attr_str(&attr);
                 table.page_break = match val.as_str() {
-                    "CELL" | "CELL_BREAK" => TablePageBreak::CellBreak,
+                    // HWPX pageBreak="CELL" is serialized by Hancom as HWP5
+                    // row-break (TABLE attr bit 1). HWPX pageBreak="TABLE"
+                    // is serialized as HWP5 cell/table break (bit 0).
+                    "TABLE" | "TABLE_BREAK" => TablePageBreak::CellBreak,
+                    "CELL" | "CELL_BREAK" => TablePageBreak::RowBreak,
                     "ROW" | "ROW_BREAK" => TablePageBreak::RowBreak,
                     _ => TablePageBreak::None,
                 };
@@ -1330,6 +1334,7 @@ fn parse_table_cell(
         match attr.key.as_ref() {
             b"borderFillIDRef" => cell.border_fill_id = parse_u16(&attr),
             b"header" => cell.is_header = attr_str(&attr) == "1",
+            b"hasMargin" => cell.apply_inner_margin = attr_str(&attr) == "1",
             _ => {}
         }
     }
@@ -4415,6 +4420,67 @@ mod tests {
         assert_eq!(para.char_shapes[0].start_pos, 0);
         assert_eq!(para.char_shapes.len(), 1);
         assert_eq!(para.controls.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_table_cell_has_margin() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+        xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">
+  <hp:p paraPrIDRef="0" styleIDRef="0">
+    <hp:tbl rowCnt="1" colCnt="1" cellSpacing="0" borderFillIDRef="0">
+      <hp:inMargin left="0" right="0" top="0" bottom="0"/>
+      <hp:tr>
+        <hp:tc name="" header="0" hasMargin="1" borderFillIDRef="0">
+          <hp:subList><hp:p paraPrIDRef="0" styleIDRef="0"><hp:run charPrIDRef="0"><hp:t>T</hp:t></hp:run></hp:p></hp:subList>
+          <hp:cellAddr colAddr="0" rowAddr="0"/>
+          <hp:cellSpan colSpan="1" rowSpan="1"/>
+          <hp:cellSz width="1000" height="1000"/>
+          <hp:cellMargin left="141" right="141" top="113" bottom="113"/>
+        </hp:tc>
+      </hp:tr>
+    </hp:tbl>
+  </hp:p>
+</hs:sec>"#;
+
+        let section = parse_hwpx_section(xml).unwrap();
+        let table = match &section.paragraphs[0].controls[0] {
+            crate::model::control::Control::Table(table) => table,
+            other => panic!("expected table, got {:?}", other),
+        };
+        assert!(table.cells[0].apply_inner_margin);
+        assert_eq!(table.cells[0].padding.left, 141);
+        assert_eq!(table.cells[0].padding.top, 113);
+    }
+
+    #[test]
+    fn test_parse_table_page_break_table_vs_cell_mapping() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+        xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">
+  <hp:p paraPrIDRef="0" styleIDRef="0">
+    <hp:tbl rowCnt="1" colCnt="1" pageBreak="TABLE" repeatHeader="1" cellSpacing="0" borderFillIDRef="0">
+      <hp:tr><hp:tc borderFillIDRef="0"><hp:cellAddr colAddr="0" rowAddr="0"/><hp:cellSpan colSpan="1" rowSpan="1"/><hp:cellSz width="1000" height="1000"/></hp:tc></hp:tr>
+    </hp:tbl>
+    <hp:tbl rowCnt="1" colCnt="1" pageBreak="CELL" repeatHeader="1" cellSpacing="0" borderFillIDRef="0">
+      <hp:tr><hp:tc borderFillIDRef="0"><hp:cellAddr colAddr="0" rowAddr="0"/><hp:cellSpan colSpan="1" rowSpan="1"/><hp:cellSz width="1000" height="1000"/></hp:tc></hp:tr>
+    </hp:tbl>
+  </hp:p>
+</hs:sec>"#;
+
+        let section = parse_hwpx_section(xml).unwrap();
+        let tables: Vec<_> = section.paragraphs[0]
+            .controls
+            .iter()
+            .filter_map(|control| match control {
+                crate::model::control::Control::Table(table) => Some(table),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(tables.len(), 2);
+        assert_eq!(tables[0].page_break, TablePageBreak::CellBreak);
+        assert_eq!(tables[1].page_break, TablePageBreak::RowBreak);
     }
 
     #[test]

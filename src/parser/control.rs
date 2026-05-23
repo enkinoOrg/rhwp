@@ -362,14 +362,14 @@ fn parse_cell(records: &[Record]) -> Cell {
 
     cell.border_fill_id = r.read_u16().unwrap_or(0);
 
-    // "안 여백 지정" (list_attr bit 16, hwplib: isApplyInnerMargin) 미설정이면
+    // "안 여백 지정" (LIST_HEADER bytes 6-7 bit 0, hwplib: isApplyInnerMargin) 미설정이면
     // 셀 패딩을 무시하고 테이블 기본 패딩을 사용해야 함
     // HWP는 이 비트가 0이어도 패딩 필드에 값을 저장하지만 렌더링에서 무시
-    // "안 여백 지정" (list_attr bit 16): 셀 고유 여백 vs 표 기본 여백 선택
-    // bit 16=1: 셀 고유 여백 사용 (파싱한 패딩값 그대로)
-    // bit 16=0: 표 기본 여백 사용 — 단, 레이아웃 시 표 기본 패딩으로 대체
+    // "안 여백 지정" (width_ref bit 0): 셀 고유 여백 vs 표 기본 여백 선택
+    // bit 0=1: 셀 고유 여백 사용 (파싱한 패딩값 그대로)
+    // bit 0=0: 표 기본 여백 사용 — 단, 레이아웃 시 표 기본 패딩으로 대체
     // → 파싱 단계에서는 원본값을 보존하고, 레이아웃에서 처리
-    cell.apply_inner_margin = (list_attr >> 16) & 0x01 != 0;
+    cell.apply_inner_margin = (cell.list_header_width_ref & 0x0001) != 0;
 
     // 34바이트 이후 추가 데이터 보존 (라운드트립용)
     if r.remaining() > 0 {
