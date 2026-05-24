@@ -34,12 +34,135 @@ pub fn serialize_section(section: &Section) -> Vec<u8> {
     super::control::reset_form_order_counter();
 
     let mut records = Vec::new();
+    let memo_lists = collect_memo_lists(section);
+    let has_memo_tail = !memo_lists.is_empty();
     let para_count = section.paragraphs.len();
     for (i, para) in section.paragraphs.iter().enumerate() {
-        let is_last = i == para_count - 1;
+        let is_last = i == para_count - 1 && !has_memo_tail;
         serialize_paragraph_with_msb(para, 0, is_last, &mut records);
     }
+    if has_memo_tail {
+        serialize_memo_tail(section, &memo_lists, &mut records);
+    }
+    serialize_master_page_tail(section, &mut records);
     write_records(&records)
+}
+
+fn serialize_master_page_tail(section: &Section, records: &mut Vec<Record>) {
+    // HWPX LAST_PAGE master page is an extension master page. Hancom HWP5 files store
+    // extension master pages after the body paragraph stream as level-1 LIST_HEADER
+    // records, not inside the SectionDef child record group.
+    if section
+        .section_def
+        .extra_child_records
+        .iter()
+        .any(|raw| raw.tag_id == tags::HWPTAG_LIST_HEADER && raw.level == 1)
+    {
+        return;
+    }
+
+    for master_page in section
+        .section_def
+        .master_pages
+        .iter()
+        .filter(|master_page| master_page.is_extension)
+    {
+        super::control::serialize_master_page(master_page, 1, records);
+    }
+}
+
+fn collect_memo_lists(section: &Section) -> Vec<(u32, Vec<Paragraph>)> {
+    let mut memo_lists = Vec::new();
+    for para in &section.paragraphs {
+        for ctrl in &para.controls {
+            if let Control::Field(field) = ctrl {
+                if field.field_type == crate::model::control::FieldType::Memo
+                    && !field.memo_paragraphs.is_empty()
+                {
+                    memo_lists.push((field.memo_index, field.memo_paragraphs.clone()));
+                }
+            }
+        }
+    }
+    memo_lists
+}
+
+fn serialize_memo_tail(
+    section: &Section,
+    memo_lists: &[(u32, Vec<Paragraph>)],
+    records: &mut Vec<Record>,
+) {
+    if memo_lists.is_empty() {
+        return;
+    }
+
+    // HWP5 spec: 메모 관련 정보는 마지막 구역 끝에 문단 리스트 형태로 저장된다.
+    // 한컴 저장본은 마지막 본문 문단의 조판 속성을 복제한 빈 root 문단 아래에
+    // MEMO_LIST, LIST_HEADER, 메모 본문 문단을 순서대로 둔다.
+    let last_para = section.paragraphs.last();
+    let mut root = Paragraph {
+        char_count: 1,
+        para_shape_id: last_para.map_or(0, |p| p.para_shape_id),
+        style_id: last_para.map_or(0, |p| p.style_id),
+        char_shapes: last_para
+            .and_then(|p| p.char_shapes.first().cloned())
+            .map(|mut cs| {
+                cs.start_pos = 0;
+                vec![cs]
+            })
+            .unwrap_or_else(|| {
+                vec![CharShapeRef {
+                    start_pos: 0,
+                    char_shape_id: 0,
+                }]
+            }),
+        line_segs: last_para
+            .map(|p| p.line_segs.clone())
+            .filter(|segs| !segs.is_empty())
+            .unwrap_or_else(|| Paragraph::new_empty().line_segs),
+        raw_header_extra: vec![0; 12],
+        ..Default::default()
+    };
+    for seg in &mut root.line_segs {
+        seg.vertical_pos = seg
+            .vertical_pos
+            .saturating_add(seg.line_height)
+            .saturating_add(seg.line_spacing);
+    }
+    root.has_para_text = false;
+    serialize_paragraph_with_msb(&root, 0, true, records);
+
+    for (memo_index, paragraphs) in memo_lists {
+        records.push(Record {
+            tag_id: tags::HWPTAG_MEMO_LIST,
+            level: 1,
+            size: 4,
+            data: memo_index.to_le_bytes().to_vec(),
+        });
+
+        let mut list_header = Vec::with_capacity(16);
+        list_header.extend_from_slice(&(paragraphs.len() as u32).to_le_bytes());
+        list_header.extend_from_slice(&[0; 12]);
+        records.push(Record {
+            tag_id: tags::HWPTAG_LIST_HEADER,
+            level: 1,
+            size: list_header.len() as u32,
+            data: list_header,
+        });
+
+        let mut memo_paragraphs = paragraphs.clone();
+        for para in &mut memo_paragraphs {
+            if para.raw_header_extra.len() < 12 {
+                para.raw_header_extra = vec![0; 12];
+            }
+            // Hancom writes memo body paragraphs under MEMO_LIST without
+            // PARA_LINE_SEG records. HWPX subList parsing may synthesize a
+            // default line segment, but keeping it here breaks the HWP5 memo
+            // container contract.
+            para.line_segs.clear();
+        }
+        serialize_paragraph_list(&memo_paragraphs, 1, records);
+    }
 }
 
 /// 문단 목록을 레코드로 직렬화 (재귀용: 셀, 머리말/꼬리말, 각주/미주 내부)
@@ -297,29 +420,27 @@ fn serialize_para_text(para: &Paragraph) -> Vec<u8> {
     use std::collections::BTreeMap;
     use std::collections::HashMap;
     let text_len = para.text.chars().count();
-    let mut field_ends: BTreeMap<usize, Vec<u32>> = BTreeMap::new();
-    // trailing FIELD_END: control_idx → ctrl_id 매핑 (FIELD_BEGIN 직후에 삽입)
-    let mut trailing_end_after_ctrl: HashMap<usize, Vec<u32>> = HashMap::new();
+    let mut field_ends: BTreeMap<usize, Vec<FieldEndMarker>> = BTreeMap::new();
+    // trailing FIELD_END: control_idx → marker 매핑 (FIELD_BEGIN 직후에 삽입)
+    let mut trailing_end_after_ctrl: HashMap<usize, Vec<FieldEndMarker>> = HashMap::new();
     // trailing FIELD_END 중 FIELD_BEGIN이 이미 본문에 배치된 경우 (orphan)
     let mut trailing_orphan_ends: Vec<u32> = Vec::new();
 
     for fr in &para.field_ranges {
-        let ctrl_id = if let Some(crate::model::control::Control::Field(f)) =
-            para.controls.get(fr.control_idx)
-        {
-            f.ctrl_id
+        let marker = if let Some(control) = para.controls.get(fr.control_idx) {
+            field_end_marker(control)
         } else {
-            0
+            FieldEndMarker::default()
         };
         if fr.end_char_idx < text_len {
-            field_ends.entry(fr.end_char_idx).or_default().push(ctrl_id);
+            field_ends.entry(fr.end_char_idx).or_default().push(marker);
         } else {
             // trailing FIELD_END: control_idx가 남은 컨트롤에 포함되는지 판별은
             // 메인 루프 후에 수행 (ctrl_idx 확정 후)
             trailing_end_after_ctrl
                 .entry(fr.control_idx)
                 .or_default()
-                .push(ctrl_id);
+                .push(marker);
         }
     }
 
@@ -364,9 +485,9 @@ fn serialize_para_text(para: &Paragraph) -> Vec<u8> {
         }
 
         // FIELD_END 삽입: 컨트롤(FIELD_BEGIN) 뒤, 텍스트 문자 앞
-        if let Some(ids) = field_ends.get(&i) {
-            for &ctrl_id in ids {
-                push_extended_ctrl(&mut code_units, 0x0004, ctrl_id);
+        if let Some(markers) = field_ends.get(&i) {
+            for &marker in markers {
+                push_field_end_ctrl(&mut code_units, marker);
                 prev_end += 8;
             }
         }
@@ -414,9 +535,9 @@ fn serialize_para_text(para: &Paragraph) -> Vec<u8> {
         push_extended_ctrl(&mut code_units, ctrl_code, ctrl_id);
 
         // 이 컨트롤(FIELD_BEGIN)에 대응하는 trailing FIELD_END 삽입
-        if let Some(end_ids) = trailing_end_after_ctrl.remove(&ctrl_idx) {
-            for eid in end_ids {
-                push_extended_ctrl(&mut code_units, 0x0004, eid);
+        if let Some(end_markers) = trailing_end_after_ctrl.remove(&ctrl_idx) {
+            for marker in end_markers {
+                push_field_end_ctrl(&mut code_units, marker);
             }
         }
 
@@ -425,9 +546,9 @@ fn serialize_para_text(para: &Paragraph) -> Vec<u8> {
 
     // orphan trailing FIELD_END: FIELD_BEGIN이 본문 갭에서 이미 배치된 경우
     // (trailing_end_after_ctrl에 남아있는 항목 = ctrl_idx가 이미 소진된 컨트롤)
-    for end_ids in trailing_end_after_ctrl.values() {
-        for &eid in end_ids {
-            push_extended_ctrl(&mut code_units, 0x0004, eid);
+    for end_markers in trailing_end_after_ctrl.values() {
+        for &marker in end_markers {
+            push_field_end_ctrl(&mut code_units, marker);
         }
     }
 
@@ -452,6 +573,66 @@ fn serialize_para_char_shape(char_shapes: &[CharShapeRef]) -> Vec<u8> {
         w.write_u32(cs.char_shape_id).unwrap();
     }
     w.into_bytes()
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct FieldEndMarker {
+    ctrl_id: u32,
+    memo_index: u32,
+}
+
+fn field_end_marker(ctrl: &Control) -> FieldEndMarker {
+    match ctrl {
+        Control::Field(field)
+            if field.field_type == crate::model::control::FieldType::Memo
+                || field.command.starts_with("MEMO/") =>
+        {
+            FieldEndMarker {
+                ctrl_id: tags::FIELD_MEMO,
+                memo_index: memo_field_index(field),
+            }
+        }
+        Control::Field(field) => FieldEndMarker {
+            ctrl_id: field.ctrl_id,
+            memo_index: 0,
+        },
+        _ => FieldEndMarker::default(),
+    }
+}
+
+fn memo_field_index(field: &crate::model::control::Field) -> u32 {
+    if field.memo_index != 0 {
+        return field.memo_index;
+    }
+    parse_memo_index_from_command(&field.command).unwrap_or(0)
+}
+
+fn parse_memo_index_from_command(command: &str) -> Option<u32> {
+    command.split('/').nth(2)?.parse().ok()
+}
+
+fn push_field_end_ctrl(code_units: &mut Vec<u16>, marker: FieldEndMarker) {
+    if marker.ctrl_id == tags::FIELD_MEMO {
+        // Hancom writes MEMO field end with a distinct 8-code-unit marker:
+        //   04 00 65 6d 25 00 01 ff ff 00 01 00 00 00 04 00
+        // The sixth code unit is the memo index. Hard-coding `1` only
+        // makes the first memo look correct and breaks later memo anchors.
+        // The begin marker is still `%%me`; reusing that begin marker for
+        // FIELD_END makes Hancom open the file but leaves memo visual styling
+        // unapplied.
+        code_units.extend_from_slice(&[
+            0x0004,
+            0x6d65,
+            0x0025,
+            0xff01,
+            0x00ff,
+            marker.memo_index as u16,
+            0x0000,
+            0x0004,
+        ]);
+    } else {
+        push_extended_ctrl(code_units, 0x0004, marker.ctrl_id);
+    }
 }
 
 /// PARA_LINE_SEG 직렬화
@@ -527,7 +708,7 @@ fn control_char_code_and_id(ctrl: &Control) -> (u16, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::control::AutoNumber;
+    use crate::model::control::{AutoNumber, Field, FieldType};
     use crate::model::document::{Section, SectionDef};
     use crate::model::paragraph::{CharShapeRef, LineSeg, Paragraph, RangeTag};
     use crate::parser::body_text::parse_body_text_section;
@@ -862,6 +1043,42 @@ mod tests {
             control_char_code_and_id(&Control::AutoNumber(AutoNumber::default())).0,
             0x0012
         );
+    }
+
+    #[test]
+    fn test_memo_field_end_uses_hancom_marker_tail() {
+        let para = Paragraph {
+            char_count: 2,
+            text: "A".to_string(),
+            char_offsets: vec![8],
+            char_shapes: vec![CharShapeRef {
+                start_pos: 0,
+                char_shape_id: 0,
+            }],
+            controls: vec![Control::Field(Field {
+                field_type: FieldType::Memo,
+                ctrl_id: tags::FIELD_MEMO,
+                command: "MEMO/65535/2/1517431184/31247371/user/\\;;".to_string(),
+                memo_index: 2,
+                ..Default::default()
+            })],
+            field_ranges: vec![crate::model::paragraph::FieldRange {
+                start_char_idx: 0,
+                end_char_idx: 1,
+                control_idx: 0,
+            }],
+            ..Default::default()
+        };
+
+        let bytes = test_serialize_para_text(&para);
+        let expected_field_end = [
+            0x04, 0x00, 0x65, 0x6d, 0x25, 0x00, 0x01, 0xff, 0xff, 0x00, 0x02, 0x00, 0x00, 0x00,
+            0x04, 0x00,
+        ];
+
+        assert!(bytes
+            .windows(expected_field_end.len())
+            .any(|window| window == expected_field_end));
     }
 
     /// 확장 컨트롤 포함 문단 라운드트립

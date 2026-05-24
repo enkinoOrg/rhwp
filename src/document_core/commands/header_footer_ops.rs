@@ -148,6 +148,7 @@ impl DocumentCore {
                 paragraphs: vec![empty_para],
                 raw_attr: apply_to as u32,
                 raw_ctrl_extra: Vec::new(),
+                ..Default::default()
             }))
         } else {
             Control::Footer(Box::new(Footer {
@@ -155,6 +156,7 @@ impl DocumentCore {
                 paragraphs: vec![empty_para],
                 raw_attr: apply_to as u32,
                 raw_ctrl_extra: Vec::new(),
+                ..Default::default()
             }))
         };
 

@@ -227,6 +227,8 @@ pub struct Field {
     pub ctrl_data_name: Option<String>,
     /// 메모 인덱스 (hwplib: memoIndex)
     pub memo_index: u32,
+    /// 메모 본문 문단 리스트 (`fieldBegin type="MEMO"` 내부 subList)
+    pub memo_paragraphs: Vec<Paragraph>,
 }
 
 impl Field {

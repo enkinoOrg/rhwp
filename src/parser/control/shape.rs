@@ -999,7 +999,7 @@ fn parse_arc_shape_data(data: &[u8], arc: &mut ArcShape) {
 }
 
 /// 다각형 도형 데이터 파싱
-/// hwplib: INT32 count + (INT32 x, INT32 y) × count (plain HWPUNIT)
+/// hwplib: INT32 count + (INT32 x, INT32 y) × count + skip(4)
 fn parse_polygon_shape_data(data: &[u8], poly: &mut PolygonShape) {
     let mut r = ByteReader::new(data);
     let cnt = r.read_i32().unwrap_or(0) as usize;
@@ -1009,6 +1009,11 @@ fn parse_polygon_shape_data(data: &[u8], poly: &mut PolygonShape) {
         let y = r.read_i32().unwrap_or(0);
         poly.points.push(Point { x, y });
     }
+    poly.raw_trailing = if r.remaining() > 0 {
+        r.read_bytes(r.remaining()).unwrap_or_default().to_vec()
+    } else {
+        Vec::new()
+    };
 }
 
 /// 곡선 도형 데이터 파싱

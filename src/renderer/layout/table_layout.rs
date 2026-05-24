@@ -668,17 +668,13 @@ impl LayoutEngine {
                 for c in 0..col_count {
                     if h_edges[0][c].is_none() && !h_covered[0][c] {
                         let b = &borders[2];
-                        if !matches!(b.line_type, crate::model::style::BorderLineType::None)
-                            && b.width > 0
-                        {
+                        if !matches!(b.line_type, crate::model::style::BorderLineType::None) {
                             h_edges[0][c] = Some(*b);
                         }
                     }
                     if h_edges[row_count][c].is_none() && !h_covered[row_count][c] {
                         let b = &borders[3];
-                        if !matches!(b.line_type, crate::model::style::BorderLineType::None)
-                            && b.width > 0
-                        {
+                        if !matches!(b.line_type, crate::model::style::BorderLineType::None) {
                             h_edges[row_count][c] = Some(*b);
                         }
                     }
@@ -686,17 +682,13 @@ impl LayoutEngine {
                 for r in 0..row_count {
                     if v_edges[0][r].is_none() && !v_covered[0][r] {
                         let b = &borders[0];
-                        if !matches!(b.line_type, crate::model::style::BorderLineType::None)
-                            && b.width > 0
-                        {
+                        if !matches!(b.line_type, crate::model::style::BorderLineType::None) {
                             v_edges[0][r] = Some(*b);
                         }
                     }
                     if v_edges[col_count][r].is_none() && !v_covered[col_count][r] {
                         let b = &borders[1];
-                        if !matches!(b.line_type, crate::model::style::BorderLineType::None)
-                            && b.width > 0
-                        {
+                        if !matches!(b.line_type, crate::model::style::BorderLineType::None) {
                             v_edges[col_count][r] = Some(*b);
                         }
                     }

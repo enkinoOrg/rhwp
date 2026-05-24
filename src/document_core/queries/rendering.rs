@@ -1718,14 +1718,14 @@ impl DocumentCore {
                     // 겹치기(overlap): 기존 바탕쪽 위에 추가
                     // 비겹치기: 기존 바탕쪽 대체
                     if is_last && !ext_mp_indices.is_empty() {
-                        let overlap_exts: Vec<usize> = ext_mp_indices
-                            .iter()
-                            .filter(|&&i| mps[i].overlap)
-                            .copied()
-                            .collect();
                         let replace_exts: Vec<usize> = ext_mp_indices
                             .iter()
-                            .filter(|&&i| !mps[i].overlap)
+                            .filter(|&&i| !mps[i].overlap || mps[i].replace_base)
+                            .copied()
+                            .collect();
+                        let overlap_exts: Vec<usize> = ext_mp_indices
+                            .iter()
+                            .filter(|&&i| mps[i].overlap && !mps[i].replace_base)
                             .copied()
                             .collect();
 

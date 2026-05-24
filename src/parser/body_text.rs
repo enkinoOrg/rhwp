@@ -699,6 +699,7 @@ fn parse_master_pages_from_raw(raw_records: &[RawRecord]) -> Vec<MasterPage> {
             apply_to,
             is_extension,
             overlap,
+            replace_base: false,
             ext_flags,
             paragraphs,
             text_width,

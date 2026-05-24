@@ -2784,6 +2784,7 @@ impl DocumentCore {
                     common,
                     drawing,
                     points,
+                    raw_trailing: Vec::new(),
                 })
             }
             "arc" => {

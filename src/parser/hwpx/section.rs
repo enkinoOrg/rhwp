@@ -12,10 +12,10 @@ use crate::model::control::{
 };
 use crate::model::document::{Section, SectionDef};
 use crate::model::footnote::{Endnote, Footnote};
-use crate::model::header_footer::{Footer, Header, HeaderFooterApply};
+use crate::model::header_footer::{Footer, Header, HeaderFooterApply, MasterPage};
 use crate::model::image::{CropInfo, ImageAttr, ImageEffect};
 use crate::model::page::{ColumnDef, ColumnDirection, ColumnType, PageBorderFill, PageDef};
-use crate::model::paragraph::{CharShapeRef, LineSeg, Paragraph};
+use crate::model::paragraph::{CharShapeRef, FieldRange, LineSeg, Paragraph};
 use crate::model::shape::{
     ArcShape, CommonObjAttr, CurveShape, DrawingObjAttr, EllipseShape, GroupShape, HorzAlign,
     HorzRelTo, LineShape, PolygonShape, RectangleShape, ShapeComponentAttr, ShapeObject, TextBox,
@@ -66,6 +66,126 @@ pub fn parse_hwpx_section(xml: &str) -> Result<Section, HwpxError> {
     Ok(section)
 }
 
+/// masterpage*.xml을 파싱하여 기존 HWP 바탕쪽 모델로 변환한다.
+pub fn parse_hwpx_master_page(xml: &str) -> Result<MasterPage, HwpxError> {
+    let mut master_page = MasterPage::default();
+    let mut reader = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    let mut root_sub_list_seen = false;
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) => {
+                let ename = e.name();
+                let local = local_name(ename.as_ref());
+                match local {
+                    b"masterPage" => parse_master_page_start(e, &mut master_page),
+                    b"subList" if !root_sub_list_seen => {
+                        parse_master_page_sub_list(e, &mut master_page);
+                        root_sub_list_seen = true;
+                    }
+                    b"p" => {
+                        let (para, _) = parse_paragraph(e, &mut reader)?;
+                        master_page.paragraphs.push(para);
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Empty(ref e)) => {
+                let ename = e.name();
+                let local = local_name(ename.as_ref());
+                match local {
+                    b"masterPage" => parse_master_page_start(e, &mut master_page),
+                    b"subList" if !root_sub_list_seen => {
+                        parse_master_page_sub_list(e, &mut master_page);
+                        root_sub_list_seen = true;
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(HwpxError::XmlError(format!("masterpage: {}", e))),
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    if master_page.text_width > 0 || master_page.text_height > 0 {
+        master_page.raw_list_header = build_hwpx_master_page_list_header(&master_page);
+    }
+
+    Ok(master_page)
+}
+
+fn parse_master_page_start(e: &quick_xml::events::BytesStart, master_page: &mut MasterPage) {
+    let mut is_last_page = false;
+    let mut is_optional_page = false;
+    let mut page_duplicate: Option<bool> = None;
+    for attr in e.attributes().flatten() {
+        match attr.key.as_ref() {
+            b"type" => match attr_str(&attr).as_str() {
+                "EVEN" => master_page.apply_to = HeaderFooterApply::Even,
+                "ODD" => master_page.apply_to = HeaderFooterApply::Odd,
+                "LAST_PAGE" => {
+                    is_last_page = true;
+                    master_page.apply_to = HeaderFooterApply::Both;
+                    master_page.is_extension = true;
+                }
+                "OPTIONAL_PAGE" => {
+                    is_optional_page = true;
+                    master_page.apply_to = HeaderFooterApply::Both;
+                    master_page.is_extension = true;
+                }
+                _ => master_page.apply_to = HeaderFooterApply::Both,
+            },
+            b"pageDuplicate" => {
+                let duplicate = attr_str(&attr) != "0";
+                page_duplicate = Some(duplicate);
+                master_page.overlap = duplicate;
+            }
+            _ => {}
+        }
+    }
+    // 한컴 HWPX -> HWP5 저장본은 LAST_PAGE 바탕쪽을 확장 바탕쪽으로 저장하면서
+    // pageDuplicate="0"인 경우에도 overlap bit를 함께 세운다.
+    if is_last_page {
+        master_page.replace_base = page_duplicate == Some(false);
+        master_page.overlap = true;
+    }
+    if is_optional_page {
+        master_page.overlap = true;
+    }
+    master_page.ext_flags = u16::from(master_page.overlap)
+        | if master_page.is_extension { 0x02 } else { 0 }
+        | if is_optional_page { 0x04 } else { 0 };
+}
+
+fn parse_master_page_sub_list(e: &quick_xml::events::BytesStart, master_page: &mut MasterPage) {
+    for attr in e.attributes().flatten() {
+        match attr.key.as_ref() {
+            b"textWidth" => master_page.text_width = parse_u32(&attr),
+            b"textHeight" => master_page.text_height = parse_u32(&attr),
+            b"hasTextRef" => master_page.text_ref = parse_u8(&attr),
+            b"hasNumRef" => master_page.num_ref = parse_u8(&attr),
+            _ => {}
+        }
+    }
+}
+
+fn build_hwpx_master_page_list_header(master_page: &MasterPage) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(34);
+    bytes.extend_from_slice(&(master_page.paragraphs.len() as u16).to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&0u16.to_le_bytes());
+    bytes.extend_from_slice(&master_page.text_width.to_le_bytes());
+    bytes.extend_from_slice(&master_page.text_height.to_le_bytes());
+    bytes.push(master_page.text_ref);
+    bytes.push(master_page.num_ref);
+    bytes.extend_from_slice(&master_page.ext_flags.to_le_bytes());
+    bytes.extend_from_slice(&[0u8; 14]);
+    bytes
+}
+
 // ─── SectionDef / PageDef ───
 
 fn parse_section_def_start(e: &quick_xml::events::BytesStart, sec_def: &mut SectionDef) {
@@ -77,6 +197,10 @@ fn parse_section_def_start(e: &quick_xml::events::BytesStart, sec_def: &mut Sect
             }
             b"tabStop" => {
                 sec_def.default_tab_spacing = parse_u32(&attr);
+            }
+            b"masterPageCnt" => {
+                let count = parse_u32(&attr).min(3);
+                sec_def.flags = (sec_def.flags & !(0x03 << 30)) | (count << 30);
             }
             // [Task #1058] 한컴 HWP5 spec 표 129 정합:
             //   - spaceColumns → column_spacing (HWPUNIT16, default 1134 for 다단)
@@ -358,6 +482,45 @@ fn parse_paragraph(
         }
         buf.clear();
     }
+
+    // FIELD_BEGIN/FIELD_END 쌍은 HWP PARA_TEXT에서 각각 8 code unit을 차지한다.
+    // HWPX 파싱 결과를 HWP로 다시 저장할 때 FIELD_END를 복원하려면, visible text
+    // 범위와 해당 Field 컨트롤 index를 field_ranges에 남겨야 한다.
+    let mut field_ranges: Vec<FieldRange> = Vec::new();
+    let mut field_stack: Vec<(usize, usize)> = Vec::new();
+    let mut control_idx: usize = 0;
+    let mut visible_char_idx: usize = 0;
+
+    for part in &text_parts {
+        match part.as_str() {
+            "\u{0003}" => {
+                if matches!(para.controls.get(control_idx), Some(Control::Field(_))) {
+                    field_stack.push((visible_char_idx, control_idx));
+                }
+                control_idx += 1;
+            }
+            "\u{0004}" => {
+                if let Some((start_char_idx, control_idx)) = field_stack.pop() {
+                    field_ranges.push(FieldRange {
+                        start_char_idx,
+                        end_char_idx: visible_char_idx,
+                        control_idx,
+                    });
+                }
+            }
+            "\u{0002}" => {
+                control_idx += 1;
+            }
+            "\u{0012}" => {
+                control_idx += 1;
+                visible_char_idx += 1;
+            }
+            _ => {
+                visible_char_idx += part.chars().count();
+            }
+        }
+    }
+    para.field_ranges = field_ranges;
 
     // 텍스트 조립: 제어 문자(\u{0002}, \u{0003}, \u{0004})는 HWP와 동일하게 텍스트에서 제외
     // HWP에서 컨트롤 위치는 char_offsets의 갭으로 표현되므로 원본 순서를 유지해 계산한다.
@@ -660,8 +823,9 @@ fn parse_note_pr_children(
                                 _ => {}
                             }
                         }
-                        // [Task #1050] separator_margin_top: HWPX 미보유 → 한컴 default -1 (sentinel)
-                        if shape.separator_margin_top == 0 {
+                        // [Task #1050] separator_margin_top: HWPX 미보유 → 한컴 default -1 (sentinel).
+                        // 단, 미주 noteLine type="NONE" 에서는 한컴 저장본이 0을 유지한다.
+                        if shape.separator_margin_top == 0 && shape.separator_line_type != 0 {
                             shape.separator_margin_top = -1;
                         }
                     }
@@ -813,10 +977,6 @@ fn page_border_fill_attr(
         _ => 0,
     };
 
-    if apply_type.eq_ignore_ascii_case("BOTH") || apply_type.eq_ignore_ascii_case("EVEN") {
-        attr |= 0x0000_0040;
-    }
-
     attr
 }
 
@@ -839,7 +999,14 @@ fn parse_visibility(e: &quick_xml::events::BytesStart, sec_def: &mut SectionDef)
         match attr.key.as_ref() {
             b"hideFirstHeader" => sec_def.hide_header = attr_str(&attr) == "1",
             b"hideFirstFooter" => sec_def.hide_footer = attr_str(&attr) == "1",
-            b"hideFirstMasterPage" => sec_def.hide_master_page = attr_str(&attr) == "1",
+            b"hideFirstMasterPage" => {
+                sec_def.hide_master_page = attr_str(&attr) == "1";
+                if sec_def.hide_master_page {
+                    sec_def.flags |= 0x0004;
+                } else {
+                    sec_def.flags &= !0x0004;
+                }
+            }
             b"border" => sec_def.hide_border = attr_str(&attr) == "HIDE_ALL",
             b"fill" => sec_def.hide_fill = attr_str(&attr) == "HIDE_ALL",
             b"hideFirstEmptyLine" => sec_def.hide_empty_line = attr_str(&attr) == "1",
@@ -993,19 +1160,19 @@ fn read_text_content_with_tabs(
 
 fn parse_tab_extension(e: &quick_xml::events::BytesStart) -> [u16; 7] {
     let mut ext = [0u16; 7];
-    ext[3] = 0x0020;
-    ext[4] = 0x0020;
-    ext[5] = 0x0020;
     ext[6] = 0x0009;
+    let mut leader = 0u16;
+    let mut tab_type = 0u16;
 
     for attr in e.attributes().flatten() {
         match attr.key.as_ref() {
             b"width" => ext[0] = parse_u16(&attr),
-            b"leader" => ext[1] = parse_u16(&attr),
-            b"type" => ext[2] = (parse_u16(&attr) & 0x00ff) << 8,
+            b"leader" => leader = parse_u16(&attr) & 0x00ff,
+            b"type" => tab_type = parse_u16(&attr) & 0x00ff,
             _ => {}
         }
     }
+    ext[2] = (tab_type << 8) | leader;
 
     ext
 }
@@ -1035,7 +1202,11 @@ fn parse_table(
             b"pageBreak" => {
                 let val = attr_str(&attr);
                 table.page_break = match val.as_str() {
-                    "CELL" | "CELL_BREAK" => TablePageBreak::CellBreak,
+                    // HWPX pageBreak="CELL" is serialized by Hancom as HWP5
+                    // row-break (TABLE attr bit 1). HWPX pageBreak="TABLE"
+                    // is serialized as HWP5 cell/table break (bit 0).
+                    "TABLE" | "TABLE_BREAK" => TablePageBreak::CellBreak,
+                    "CELL" | "CELL_BREAK" => TablePageBreak::RowBreak,
                     "ROW" | "ROW_BREAK" => TablePageBreak::RowBreak,
                     _ => TablePageBreak::None,
                 };
@@ -1291,6 +1462,7 @@ fn parse_table_cell(
         match attr.key.as_ref() {
             b"borderFillIDRef" => cell.border_fill_id = parse_u16(&attr),
             b"header" => cell.is_header = attr_str(&attr) == "1",
+            b"hasMargin" => cell.apply_inner_margin = attr_str(&attr) == "1",
             _ => {}
         }
     }
@@ -1793,6 +1965,7 @@ enum ShapeStorageKind {
 #[derive(Default)]
 struct ObjectElementIds {
     instid: u32,
+    round_rate: u8,
 }
 
 /// HWPX 일부 샘플은 `<hp:curSz width="0" height="0">`를 기록하면서 실제 크기는
@@ -1886,6 +2059,7 @@ fn parse_object_element_attrs(
             }
             b"instid" => ids.instid = parse_u32(&attr),
             b"groupLevel" => shape_attr.group_level = attr_str(&attr).parse().unwrap_or(0),
+            b"ratio" => ids.round_rate = parse_u8(&attr).min(100),
             _ => {}
         }
     }
@@ -2714,7 +2888,7 @@ fn parse_shape_object(
         b"rect" => ShapeObject::Rectangle(RectangleShape {
             common,
             drawing,
-            round_rate: 0,
+            round_rate: object_ids.round_rate,
             x_coords,
             y_coords,
         }),
@@ -2739,6 +2913,7 @@ fn parse_shape_object(
             // [Task #1067] HWPX `<hc:pt>` 점들을 PolygonShape::points 로 매핑.
             // 누락 시 polygon path 가 빈 상태로 렌더링되어 도형 미표시 (rhwp-studio + 한컴 둘 다).
             points: polygon_points,
+            raw_trailing: Vec::new(),
         }),
         b"curve" => ShapeObject::Curve(CurveShape {
             common,
@@ -2750,7 +2925,7 @@ fn parse_shape_object(
         _ => ShapeObject::Rectangle(RectangleShape {
             common,
             drawing,
-            round_rate: 0,
+            round_rate: object_ids.round_rate,
             x_coords,
             y_coords,
         }),
@@ -3108,6 +3283,8 @@ fn parse_autonum_attrs(e: &quick_xml::events::BytesStart) -> AutoNumber {
 fn parse_field_begin_attrs(e: &quick_xml::events::BytesStart) -> Field {
     let mut f = Field::default();
     let mut field_name: Option<String> = None;
+    let mut id_attr: Option<u32> = None;
+    let mut fieldid_attr: Option<u32> = None;
     for attr in e.attributes().flatten() {
         match attr.key.as_ref() {
             b"type" => f.field_type = parse_field_type(&attr_str(&attr)),
@@ -3115,13 +3292,13 @@ fn parse_field_begin_attrs(e: &quick_xml::events::BytesStart) -> Field {
             // [Task #852 Stage 2.5] HWP5 직렬화에 필요한 필드 메타
             b"id" => {
                 if let Ok(v) = attr_str(&attr).parse::<u32>() {
-                    f.field_id = v;
+                    id_attr = Some(v);
                 }
             }
             b"fieldid" => {
                 if let Ok(v) = attr_str(&attr).parse::<u32>() {
                     // fieldid (instance ID) — 정답지의 CTRL_HEADER 끝에 저장
-                    f.field_id = v;
+                    fieldid_attr = Some(v);
                 }
             }
             b"editable" => {
@@ -3133,6 +3310,11 @@ fn parse_field_begin_attrs(e: &quick_xml::events::BytesStart) -> Field {
             _ => {}
         }
     }
+    f.field_id = if matches!(f.field_type, FieldType::Memo) {
+        id_attr.or(fieldid_attr).unwrap_or(0)
+    } else {
+        fieldid_attr.or(id_attr).unwrap_or(0)
+    };
     // [Task #852 Stage 2.5] field_type → ctrl_id 매핑.
     // 정답지 (samples/form-01.hwp) reverse engineering: ClickHere CTRL_HEADER 의 ctrl_id 가
     // "%clk" (FIELD_CLICKHERE). HWPX parser 가 이전엔 ctrl_id 미설정 → serializer 가
@@ -3221,11 +3403,25 @@ fn parse_ctrl_header(
 ) -> Result<Control, HwpxError> {
     let mut header = Header::default();
     for attr in e.attributes().flatten() {
-        if attr.key.as_ref() == b"applyPageType" {
-            header.apply_to = parse_apply_page_type(&attr_str(&attr));
+        match attr.key.as_ref() {
+            b"applyPageType" => {
+                header.apply_to = parse_apply_page_type(&attr_str(&attr));
+            }
+            b"id" => {
+                header
+                    .raw_ctrl_extra
+                    .extend_from_slice(&parse_u32(&attr).to_le_bytes());
+            }
+            _ => {}
         }
     }
-    header.paragraphs = parse_sublist_paragraphs(reader, b"header")?;
+    let sublist = parse_sublist_paragraphs_with_layout(reader, b"header")?;
+    header.paragraphs = sublist.paragraphs;
+    header.list_attr = sublist.list_attr;
+    header.text_width = sublist.text_width;
+    header.text_height = sublist.text_height;
+    header.text_ref = sublist.text_ref;
+    header.num_ref = sublist.num_ref;
     Ok(Control::Header(Box::new(header)))
 }
 
@@ -3236,11 +3432,25 @@ fn parse_ctrl_footer(
 ) -> Result<Control, HwpxError> {
     let mut footer = Footer::default();
     for attr in e.attributes().flatten() {
-        if attr.key.as_ref() == b"applyPageType" {
-            footer.apply_to = parse_apply_page_type(&attr_str(&attr));
+        match attr.key.as_ref() {
+            b"applyPageType" => {
+                footer.apply_to = parse_apply_page_type(&attr_str(&attr));
+            }
+            b"id" => {
+                footer
+                    .raw_ctrl_extra
+                    .extend_from_slice(&parse_u32(&attr).to_le_bytes());
+            }
+            _ => {}
         }
     }
-    footer.paragraphs = parse_sublist_paragraphs(reader, b"footer")?;
+    let sublist = parse_sublist_paragraphs_with_layout(reader, b"footer")?;
+    footer.paragraphs = sublist.paragraphs;
+    footer.list_attr = sublist.list_attr;
+    footer.text_width = sublist.text_width;
+    footer.text_height = sublist.text_height;
+    footer.text_ref = sublist.text_ref;
+    footer.num_ref = sublist.num_ref;
     Ok(Control::Footer(Box::new(footer)))
 }
 
@@ -3386,6 +3596,8 @@ fn parse_ctrl_field_begin(
                 let local = local_name(cname.as_ref());
                 if local == b"parameters" {
                     parse_field_parameters(reader, &mut f)?;
+                } else if local == b"subList" && f.field_type == FieldType::Memo {
+                    f.memo_paragraphs = parse_sublist_paragraphs(reader, b"subList")?;
                 } else {
                     let tag = local.to_vec();
                     skip_element(reader, &tag)?;
@@ -3410,6 +3622,7 @@ fn parse_ctrl_field_begin(
 fn parse_field_parameters(reader: &mut Reader<&[u8]>, field: &mut Field) -> Result<(), HwpxError> {
     let mut buf = Vec::new();
     let mut in_command = false;
+    let mut in_memo_number = false;
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref ce)) => {
@@ -3420,6 +3633,12 @@ fn parse_field_parameters(reader: &mut Reader<&[u8]>, field: &mut Field) -> Resu
                         if attr.key.as_ref() == b"name" && attr_str(&attr) == "Command" {
                             in_command = true;
                             field.command.clear();
+                        }
+                    }
+                } else if local == b"integerParam" {
+                    for attr in ce.attributes().flatten() {
+                        if attr.key.as_ref() == b"name" && attr_str(&attr) == "Number" {
+                            in_memo_number = true;
                         }
                     }
                 }
@@ -3438,6 +3657,10 @@ fn parse_field_parameters(reader: &mut Reader<&[u8]>, field: &mut Field) -> Resu
             Ok(Event::Text(ref t)) => {
                 if in_command {
                     field.command.push_str(&t.decode().unwrap_or_default());
+                } else if in_memo_number {
+                    if let Ok(value) = t.decode().unwrap_or_default().trim().parse::<u32>() {
+                        field.memo_index = value;
+                    }
                 }
             }
             Ok(Event::GeneralRef(ref r)) => {
@@ -3450,6 +3673,8 @@ fn parse_field_parameters(reader: &mut Reader<&[u8]>, field: &mut Field) -> Resu
                 let local = local_name(eename.as_ref());
                 if local == b"stringParam" {
                     in_command = false;
+                } else if local == b"integerParam" {
+                    in_memo_number = false;
                 } else if local == b"parameters" {
                     break;
                 }
@@ -3500,6 +3725,94 @@ fn parse_sublist_paragraphs(
         buf.clear();
     }
     Ok(paragraphs)
+}
+
+#[derive(Default)]
+struct HwpxSubListLayout {
+    paragraphs: Vec<Paragraph>,
+    list_attr: u32,
+    text_width: u32,
+    text_height: u32,
+    text_ref: u8,
+    num_ref: u8,
+}
+
+/// HWPX header/footer subList는 HWP5 LIST_HEADER의 layout 필드로 materialize해야 한다.
+fn parse_sublist_paragraphs_with_layout(
+    reader: &mut Reader<&[u8]>,
+    end_tag: &[u8],
+) -> Result<HwpxSubListLayout, HwpxError> {
+    let mut layout = HwpxSubListLayout::default();
+    let mut root_sub_list_seen = false;
+    let mut buf = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref ce)) => {
+                let cname = ce.name();
+                let local = local_name(cname.as_ref());
+                match local {
+                    b"subList" if !root_sub_list_seen => {
+                        parse_hwpx_sublist_layout_attrs(ce, &mut layout);
+                        root_sub_list_seen = true;
+                    }
+                    b"p" => {
+                        let (para, _) = parse_paragraph(ce, reader)?;
+                        layout.paragraphs.push(para);
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Empty(ref ce)) => {
+                let cname = ce.name();
+                let local = local_name(cname.as_ref());
+                if local == b"subList" && !root_sub_list_seen {
+                    parse_hwpx_sublist_layout_attrs(ce, &mut layout);
+                    root_sub_list_seen = true;
+                }
+            }
+            Ok(Event::End(ref ee)) => {
+                let eename = ee.name();
+                if local_name(eename.as_ref()) == end_tag {
+                    break;
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => {
+                return Err(HwpxError::XmlError(format!(
+                    "{}: {}",
+                    String::from_utf8_lossy(end_tag),
+                    e
+                )))
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Ok(layout)
+}
+
+fn parse_hwpx_sublist_layout_attrs(
+    e: &quick_xml::events::BytesStart,
+    layout: &mut HwpxSubListLayout,
+) {
+    for attr in e.attributes().flatten() {
+        match attr.key.as_ref() {
+            b"vertAlign" => {
+                layout.list_attr |= match attr_str(&attr).as_str() {
+                    "CENTER" => 1 << 21,
+                    "BOTTOM" => 2 << 21,
+                    _ => 0,
+                };
+            }
+            b"textWidth" => layout.text_width = parse_u32(&attr),
+            b"textHeight" => layout.text_height = parse_u32(&attr),
+            b"hasTextRef" => layout.text_ref = parse_u8(&attr),
+            b"hasNumRef" => layout.num_ref = parse_u8(&attr),
+            _ => {}
+        }
+    }
 }
 
 // ─── 문단 레벨 컨트롤 파싱 (compose, dutmal, equation) ───
@@ -4322,6 +4635,24 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_hwpx_tab_extension_uses_hwp5_inline_format() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+        xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">
+  <hp:p paraPrIDRef="0" styleIDRef="0">
+    <hp:run charPrIDRef="0">
+      <hp:t>A<hp:tab width="17283" leader="3" type="2"/>(페이지 표기)</hp:t>
+    </hp:run>
+  </hp:p>
+</hs:sec>"#;
+
+        let section = parse_hwpx_section(xml).unwrap();
+        let para = &section.paragraphs[0];
+        assert_eq!(para.text, "A\t(페이지 표기)");
+        assert_eq!(para.tab_extended, vec![[17283, 0, 0x0203, 0, 0, 0, 9]]);
+    }
+
+    #[test]
     fn test_parse_control_keeps_interleaved_offsets() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
@@ -4354,6 +4685,100 @@ mod tests {
         assert_eq!(para.char_shapes[0].start_pos, 0);
         assert_eq!(para.char_shapes.len(), 1);
         assert_eq!(para.controls.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_table_cell_has_margin() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+        xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">
+  <hp:p paraPrIDRef="0" styleIDRef="0">
+    <hp:tbl rowCnt="1" colCnt="1" cellSpacing="0" borderFillIDRef="0">
+      <hp:inMargin left="0" right="0" top="0" bottom="0"/>
+      <hp:tr>
+        <hp:tc name="" header="0" hasMargin="1" borderFillIDRef="0">
+          <hp:subList><hp:p paraPrIDRef="0" styleIDRef="0"><hp:run charPrIDRef="0"><hp:t>T</hp:t></hp:run></hp:p></hp:subList>
+          <hp:cellAddr colAddr="0" rowAddr="0"/>
+          <hp:cellSpan colSpan="1" rowSpan="1"/>
+          <hp:cellSz width="1000" height="1000"/>
+          <hp:cellMargin left="141" right="141" top="113" bottom="113"/>
+        </hp:tc>
+      </hp:tr>
+    </hp:tbl>
+  </hp:p>
+</hs:sec>"#;
+
+        let section = parse_hwpx_section(xml).unwrap();
+        let table = match &section.paragraphs[0].controls[0] {
+            crate::model::control::Control::Table(table) => table,
+            other => panic!("expected table, got {:?}", other),
+        };
+        assert!(table.cells[0].apply_inner_margin);
+        assert_eq!(table.cells[0].padding.left, 141);
+        assert_eq!(table.cells[0].padding.top, 113);
+    }
+
+    #[test]
+    fn test_parse_table_page_break_table_vs_cell_mapping() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+        xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">
+  <hp:p paraPrIDRef="0" styleIDRef="0">
+    <hp:tbl rowCnt="1" colCnt="1" pageBreak="TABLE" repeatHeader="1" cellSpacing="0" borderFillIDRef="0">
+      <hp:tr><hp:tc borderFillIDRef="0"><hp:cellAddr colAddr="0" rowAddr="0"/><hp:cellSpan colSpan="1" rowSpan="1"/><hp:cellSz width="1000" height="1000"/></hp:tc></hp:tr>
+    </hp:tbl>
+    <hp:tbl rowCnt="1" colCnt="1" pageBreak="CELL" repeatHeader="1" cellSpacing="0" borderFillIDRef="0">
+      <hp:tr><hp:tc borderFillIDRef="0"><hp:cellAddr colAddr="0" rowAddr="0"/><hp:cellSpan colSpan="1" rowSpan="1"/><hp:cellSz width="1000" height="1000"/></hp:tc></hp:tr>
+    </hp:tbl>
+  </hp:p>
+</hs:sec>"#;
+
+        let section = parse_hwpx_section(xml).unwrap();
+        let tables: Vec<_> = section.paragraphs[0]
+            .controls
+            .iter()
+            .filter_map(|control| match control {
+                crate::model::control::Control::Table(table) => Some(table),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(tables.len(), 2);
+        assert_eq!(tables[0].page_break, TablePageBreak::CellBreak);
+        assert_eq!(tables[1].page_break, TablePageBreak::RowBreak);
+    }
+
+    #[test]
+    fn test_parse_field_begin_end_materializes_field_range() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+        xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">
+  <hp:p paraPrIDRef="0" styleIDRef="0">
+    <hp:run charPrIDRef="0">
+      <hp:ctrl>
+        <hp:fieldBegin type="MEMO" id="2135782115" fieldid="623209829"/>
+      </hp:ctrl>
+      <hp:t>ABC</hp:t>
+      <hp:ctrl>
+        <hp:fieldEnd beginIDRef="2135782115" fieldid="623209829"/>
+      </hp:ctrl>
+    </hp:run>
+  </hp:p>
+</hs:sec>"#;
+
+        let section = parse_hwpx_section(xml).unwrap();
+        let para = &section.paragraphs[0];
+
+        assert_eq!(para.text, "ABC");
+        assert_eq!(para.char_offsets, vec![8, 9, 10]);
+        assert_eq!(para.char_count, 20);
+        assert_eq!(para.controls.len(), 1);
+        assert_eq!(para.field_ranges.len(), 1);
+
+        let range = &para.field_ranges[0];
+        assert_eq!(range.start_char_idx, 0);
+        assert_eq!(range.end_char_idx, 3);
+        assert_eq!(range.control_idx, 0);
     }
 
     #[test]
@@ -4435,6 +4860,136 @@ mod tests {
             f64::from(0.723636f32)
         );
         assert_eq!(read_f64(&shape_attr.raw_rendering, scale_start + 16), 310.0);
+    }
+
+    #[test]
+    fn test_parse_memo_field_parameters_preserves_number_as_memo_index() {
+        let xml = r#"<hp:parameters xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+  <hp:stringParam name="Command">MEMO/65535/2/1650281184/31247371/user/\;;</hp:stringParam>
+  <hp:integerParam name="Number">2</hp:integerParam>
+</hp:parameters>"#;
+        let mut reader = Reader::from_str(xml);
+        let mut buf = Vec::new();
+        let mut field = Field {
+            field_type: FieldType::Memo,
+            ..Default::default()
+        };
+
+        loop {
+            match reader.read_event_into(&mut buf).unwrap() {
+                Event::Start(ref e) if local_name(e.name().as_ref()) == b"parameters" => {
+                    parse_field_parameters(&mut reader, &mut field).unwrap();
+                    break;
+                }
+                Event::Eof => panic!("parameters not found"),
+                _ => {}
+            }
+            buf.clear();
+        }
+
+        assert_eq!(field.command, "MEMO/65535/2/1650281184/31247371/user/\\;;");
+        assert_eq!(field.memo_index, 2);
+    }
+
+    #[test]
+    fn test_parse_memo_field_begin_uses_id_as_hwp5_field_id() {
+        let xml = r#"<hp:fieldBegin xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" type="MEMO" id="2135782115" fieldid="623209829" />"#;
+        let mut reader = Reader::from_str(xml);
+        let mut buf = Vec::new();
+
+        loop {
+            match reader.read_event_into(&mut buf).unwrap() {
+                Event::Empty(ref e) | Event::Start(ref e)
+                    if local_name(e.name().as_ref()) == b"fieldBegin" =>
+                {
+                    let field = parse_field_begin_attrs(e);
+                    assert_eq!(field.field_type, FieldType::Memo);
+                    assert_eq!(field.field_id, 2_135_782_115);
+                    assert_eq!(field.ctrl_id, tags::FIELD_MEMO);
+                    break;
+                }
+                Event::Eof => panic!("fieldBegin not found"),
+                _ => {}
+            }
+            buf.clear();
+        }
+    }
+
+    #[test]
+    fn test_parse_master_page_last_page_extension() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<masterPage xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+            type="LAST_PAGE" pageDuplicate="0">
+  <hp:subList textWidth="1000" textHeight="2000" hasTextRef="1" hasNumRef="0">
+    <hp:p id="0" paraPrIDRef="0" styleIDRef="0">
+      <hp:run charPrIDRef="0">
+        <hp:t>last page</hp:t>
+      </hp:run>
+    </hp:p>
+  </hp:subList>
+</masterPage>"#;
+
+        let master_page = parse_hwpx_master_page(xml).unwrap();
+        assert_eq!(master_page.apply_to, HeaderFooterApply::Both);
+        assert!(master_page.is_extension);
+        assert!(master_page.overlap);
+        assert!(master_page.replace_base);
+        assert_eq!(master_page.ext_flags, 0x0003);
+        assert_eq!(master_page.text_width, 1000);
+        assert_eq!(master_page.text_height, 2000);
+        assert_eq!(master_page.text_ref, 1);
+        assert_eq!(master_page.paragraphs.len(), 1);
+        assert_eq!(master_page.paragraphs[0].text, "last page");
+        assert_eq!(master_page.raw_list_header.len(), 34);
+    }
+
+    #[test]
+    fn test_parse_master_page_optional_page_extension() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<masterPage xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+            type="OPTIONAL_PAGE" pageNumber="4" pageDuplicate="0">
+  <hp:subList textWidth="1000" textHeight="2000" hasTextRef="0" hasNumRef="0">
+    <hp:p id="0" paraPrIDRef="0" styleIDRef="0">
+      <hp:run charPrIDRef="0">
+        <hp:t>optional page</hp:t>
+      </hp:run>
+    </hp:p>
+  </hp:subList>
+</masterPage>"#;
+
+        let master_page = parse_hwpx_master_page(xml).unwrap();
+        assert_eq!(master_page.apply_to, HeaderFooterApply::Both);
+        assert!(master_page.is_extension);
+        assert!(master_page.overlap);
+        assert!(!master_page.replace_base);
+        assert_eq!(master_page.ext_flags, 0x0007);
+        assert_eq!(master_page.raw_list_header.len(), 34);
+    }
+
+    #[test]
+    fn test_parse_rect_ratio_as_round_rate() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+        xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">
+  <hp:p id="0" paraPrIDRef="0" styleIDRef="0">
+    <hp:run charPrIDRef="0">
+      <hp:rect id="1" zOrder="0" ratio="50">
+        <hp:sz width="100" height="50"/>
+        <hp:pos treatAsChar="0" vertRelTo="PARA" horzRelTo="PARA"/>
+      </hp:rect>
+      <hp:t/>
+    </hp:run>
+  </hp:p>
+</hs:sec>"#;
+
+        let section = parse_hwpx_section(xml).unwrap();
+        let Control::Shape(shape) = &section.paragraphs[0].controls[0] else {
+            panic!("expected shape control");
+        };
+        let ShapeObject::Rectangle(rect) = shape.as_ref() else {
+            panic!("expected rectangle shape");
+        };
+        assert_eq!(rect.round_rate, 50);
     }
 
     #[test]

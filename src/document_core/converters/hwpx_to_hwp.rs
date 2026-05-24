@@ -18,7 +18,7 @@
 
 use crate::model::bin_data::{BinDataStatus, BinDataType};
 use crate::model::control::Control;
-use crate::model::document::{Document, Section};
+use crate::model::document::{Document, Section, SectionDef};
 use crate::model::image::Picture;
 use crate::model::paragraph::Paragraph;
 use crate::model::shape::{ShapeObject, TextBox};
@@ -67,14 +67,22 @@ pub struct AdapterReport {
     pub section_def_controls_inserted: u32,
     /// HWPX `hp:pic@href` 를 HWP CTRL_DATA ParameterSet 으로 materialize한 횟수
     pub picture_href_ctrl_data_materialized: u32,
+    /// HWPX 3x2 row-break table의 HWP5 layout CTRL_DATA ParameterSet materialize 횟수
+    pub table_layout_ctrl_data_materialized: u32,
     /// HWPX drawText TextBox LIST_HEADER tail materialize 횟수
     pub text_box_list_header_tail_materialized: u32,
     /// HWPX drawText 내부 paragraph PARA_HEADER tail materialize 횟수
     pub text_box_para_header_tail_materialized: u32,
+    /// HWPX 출처 일반 paragraph PARA_HEADER tail materialize 횟수
+    pub para_header_tail_materialized: u32,
     /// HWPX 수식(Equation) CTRL_HEADER attr 중 한컴 저장 관례 비트 보강 횟수 (Task #1061)
     pub equation_ctrl_header_attr_materialized: u32,
     /// HWPX 수식(Equation) EQEDIT 의 font_name/version_info 정답지 정합 정정 횟수 (Task #1061 Stage 2)
     pub equation_font_version_normalized: u32,
+    /// HWPX 바탕쪽 포함 SectionDef CTRL_HEADER 확장 tail materialize 횟수
+    pub section_def_master_page_tail_materialized: u32,
+    /// HWPX 후속 구역 첫 문단 break_type 을 한컴 HWP 저장 관례로 보정한 횟수
+    pub following_section_break_type_materialized: u32,
 }
 
 impl AdapterReport {
@@ -106,10 +114,14 @@ impl AdapterReport {
                 + self.bin_data_metadata_normalized
                 + self.section_def_controls_inserted
                 + self.picture_href_ctrl_data_materialized
+                + self.table_layout_ctrl_data_materialized
                 + self.text_box_list_header_tail_materialized
                 + self.text_box_para_header_tail_materialized
+                + self.para_header_tail_materialized
                 + self.equation_ctrl_header_attr_materialized
-                + self.equation_font_version_normalized)
+                + self.equation_font_version_normalized
+                + self.section_def_master_page_tail_materialized
+                + self.following_section_break_type_materialized)
                 > 0
     }
 }
@@ -141,8 +153,10 @@ pub fn convert_hwpx_to_hwp_ir(doc: &mut Document) -> AdapterReport {
     normalize_bin_data_for_hwp(doc, &mut report);
 
     // Stage 4: SectionDef 컨트롤 삽입 (HWPX 파서가 만들지 않으므로 직렬화기가 PAGE_DEF 출력 못 함)
-    for section in &mut doc.sections {
+    for (section_idx, section) in doc.sections.iter_mut().enumerate() {
+        adapt_section_def(&mut section.section_def, &mut report);
         insert_section_def_control(section, &mut report);
+        materialize_following_section_break_type(section_idx, section, &mut report);
     }
 
     normalize_paragraph_char_border_fills(doc, &mut report);
@@ -259,7 +273,9 @@ fn normalize_doc_properties_for_hwp(doc: &mut Document, report: &mut AdapterRepo
 ///
 /// ## 동작
 ///
-/// 1. 섹션의 첫 문단에 `Control::SectionDef` 가 이미 있으면 no-op (idempotent)
+/// 1. 섹션의 첫 문단에 `Control::SectionDef` 가 이미 있으면 `section.section_def` 의 최신
+///    값을 반영한다. HWPX package-level masterpage 는 section XML 파싱 뒤에 붙기 때문에,
+///    기존 컨트롤 복사본이 오래된 상태일 수 있다.
 /// 2. 없으면 `Control::SectionDef(Box::new(section.section_def.clone()))` 를 첫 문단의
 ///    `controls[0]` 위치에 삽입
 ///
@@ -272,11 +288,12 @@ fn insert_section_def_control(section: &mut Section, report: &mut AdapterReport)
         return;
     }
     let first_para = &mut section.paragraphs[0];
-    let already_has_section_def = first_para
+    if let Some(Control::SectionDef(section_def)) = first_para
         .controls
-        .iter()
-        .any(|c| matches!(c, Control::SectionDef(_)));
-    if already_has_section_def {
+        .iter_mut()
+        .find(|c| matches!(c, Control::SectionDef(_)))
+    {
+        **section_def = section.section_def.clone();
         return;
     }
     first_para.controls.insert(
@@ -284,6 +301,34 @@ fn insert_section_def_control(section: &mut Section, report: &mut AdapterReport)
         Control::SectionDef(Box::new(section.section_def.clone())),
     );
     report.section_def_controls_inserted += 1;
+}
+
+fn materialize_following_section_break_type(
+    section_idx: usize,
+    section: &mut Section,
+    report: &mut AdapterReport,
+) {
+    if section_idx == 0 {
+        return;
+    }
+
+    let Some(first_para) = section.paragraphs.first_mut() else {
+        return;
+    };
+
+    let has_section_def = first_para
+        .controls
+        .iter()
+        .any(|control| matches!(control, Control::SectionDef(_)));
+    if !has_section_def || first_para.raw_break_type == 0x04 {
+        return;
+    }
+
+    // 한컴 HWPX->HWP 정답지는 후속 구역 첫 문단에 SectionDef control을 유지하면서도
+    // PARA_HEADER break_type은 구역나누기(0x01/0x03)가 아니라 쪽나누기(0x04)로 저장한다.
+    // full exam_kor처럼 선택 과목이 섹션으로 분리된 문서에서 한컴 로더는 이 조합에 민감하다.
+    first_para.raw_break_type = 0x04;
+    report.following_section_break_type_materialized += 1;
 }
 
 fn normalize_paragraph_char_border_fills(doc: &mut Document, report: &mut AdapterReport) {
@@ -423,6 +468,8 @@ fn is_transparent_paragraph_no_fill_candidate(border_fill: &BorderFill) -> bool 
 }
 
 fn adapt_paragraph(para: &mut Paragraph, report: &mut AdapterReport) {
+    materialize_para_header_tail(para, report);
+
     if para.ctrl_data_records.len() < para.controls.len() {
         para.ctrl_data_records
             .resize_with(para.controls.len(), || None);
@@ -432,7 +479,12 @@ fn adapt_paragraph(para: &mut Paragraph, report: &mut AdapterReport) {
     let ctrl_data_records = &mut para.ctrl_data_records;
     for (idx, ctrl) in controls.iter_mut().enumerate() {
         match ctrl {
-            Control::Table(table) => adapt_table(table, report),
+            Control::Table(table) => {
+                adapt_table(table, report);
+                adapt_table_layout_ctrl_data(table, &mut ctrl_data_records[idx], report);
+            }
+            Control::Header(header) => adapt_paragraphs(&mut header.paragraphs, report),
+            Control::Footer(footer) => adapt_paragraphs(&mut footer.paragraphs, report),
             Control::Picture(pic) => {
                 adapt_picture_href_ctrl_data(pic, &mut ctrl_data_records[idx], report)
             }
@@ -441,6 +493,62 @@ fn adapt_paragraph(para: &mut Paragraph, report: &mut AdapterReport) {
             _ => {}
         }
     }
+}
+
+fn adapt_paragraphs(paragraphs: &mut [Paragraph], report: &mut AdapterReport) {
+    for para in paragraphs {
+        adapt_paragraph(para, report);
+    }
+}
+
+fn materialize_para_header_tail(para: &mut Paragraph, report: &mut AdapterReport) {
+    if para.raw_header_extra.len() >= 12 {
+        return;
+    }
+
+    if para.raw_header_extra.len() >= 10 {
+        para.raw_header_extra.resize(12, 0);
+    } else {
+        let mut extra = vec![0; 12];
+        let char_shape_count = para.char_shapes.len().max(1).min(u16::MAX as usize) as u16;
+        let range_tag_count = para.range_tags.len().min(u16::MAX as usize) as u16;
+        let line_seg_count = para.line_segs.len().min(u16::MAX as usize) as u16;
+
+        extra[0..2].copy_from_slice(&char_shape_count.to_le_bytes());
+        extra[2..4].copy_from_slice(&range_tag_count.to_le_bytes());
+        extra[4..6].copy_from_slice(&line_seg_count.to_le_bytes());
+
+        para.raw_header_extra = extra;
+    }
+
+    report.para_header_tail_materialized += 1;
+}
+
+fn adapt_section_def(section_def: &mut SectionDef, report: &mut AdapterReport) {
+    materialize_section_def_master_page_tail(section_def, report);
+
+    for master_page in &mut section_def.master_pages {
+        adapt_paragraphs(&mut master_page.paragraphs, report);
+    }
+}
+
+fn materialize_section_def_master_page_tail(
+    section_def: &mut SectionDef,
+    report: &mut AdapterReport,
+) {
+    if section_def.master_pages.is_empty() || !section_def.raw_ctrl_extra.is_empty() {
+        return;
+    }
+
+    // HWPX 출처 SectionDef는 HWP 원본 CTRL_HEADER tail이 없지만, 한컴이 HWPX를
+    // HWP5로 저장한 정답지는 바탕쪽이 있는 구역에서 대표Language(0) 뒤에
+    // 0x0001 marker + 15 byte zero 확장 영역을 붙여 총 43 byte ctrl_data
+    // (CTRL_HEADER 47 byte)를 만든다.
+    let mut extra = vec![0; 19];
+    extra[0..2].copy_from_slice(&0u16.to_le_bytes());
+    extra[2..4].copy_from_slice(&1u16.to_le_bytes());
+    section_def.raw_ctrl_extra = extra;
+    report.section_def_master_page_tail_materialized += 1;
 }
 
 /// [Task #1061] HWPX 수식 control 의 한컴 호환 contract 정정.
@@ -474,9 +582,7 @@ fn adapt_shape(shape: &mut ShapeObject, report: &mut AdapterReport) {
     if let Some(drawing) = shape.drawing_mut() {
         if let Some(text_box) = &mut drawing.text_box {
             materialize_text_box_hwp5_envelope(text_box, report);
-            for para in &mut text_box.paragraphs {
-                adapt_paragraph(para, report);
-            }
+            adapt_paragraphs(&mut text_box.paragraphs, report);
         }
     }
 
@@ -573,11 +679,53 @@ fn normalize_picture_href_for_hwp_ctrl_data(href: &str) -> String {
     }
 }
 
+fn adapt_table_layout_ctrl_data(
+    table: &Table,
+    ctrl_data_slot: &mut Option<Vec<u8>>,
+    report: &mut AdapterReport,
+) {
+    if ctrl_data_slot.is_some() || !table_requires_layout_ctrl_data(table) {
+        return;
+    }
+
+    *ctrl_data_slot = Some(build_table_layout_ctrl_data());
+    report.table_layout_ctrl_data_materialized += 1;
+}
+
+fn table_requires_layout_ctrl_data(table: &Table) -> bool {
+    table.row_count == 3
+        && table.col_count == 2
+        && table.repeat_header
+        && matches!(table.page_break, TablePageBreak::RowBreak)
+}
+
+fn build_table_layout_ctrl_data() -> Vec<u8> {
+    // 한컴 HWPX→HWP 변환본에서 3x2 선택지 표 뒤에 붙는 Table CTRL_DATA.
+    // 공식 5.0 문서에는 의미가 정리되어 있지 않지만, #1064/#1099 정답지 모두
+    // 같은 104바이트 ParameterSet(0x021b → 0x0242)을 사용한다.
+    const VALUES: [u32; 11] = [3826, 1048, 28346, 8475, 708, 0, 2, 9, 0, 59528, 84188];
+
+    let mut data = Vec::with_capacity(104);
+    data.extend_from_slice(&0x021b_u16.to_le_bytes());
+    data.extend_from_slice(&1_u16.to_le_bytes());
+    data.extend_from_slice(&0_u16.to_le_bytes());
+    data.extend_from_slice(&0x0242_u16.to_le_bytes());
+    data.extend_from_slice(&0x8000_u16.to_le_bytes());
+    data.extend_from_slice(&0x0242_u16.to_le_bytes());
+    data.extend_from_slice(&(VALUES.len() as u16).to_le_bytes());
+    data.extend_from_slice(&0_u16.to_le_bytes());
+    for (idx, value) in VALUES.iter().enumerate() {
+        data.extend_from_slice(&(0x4000_u16 + idx as u16).to_le_bytes());
+        data.extend_from_slice(&0x0004_u16.to_le_bytes());
+        data.extend_from_slice(&value.to_le_bytes());
+    }
+    data
+}
+
 fn adapt_table(table: &mut Table, report: &mut AdapterReport) {
     // 1. raw_ctrl_data 합성 (HWPX 출처는 비어있음)
     if table.raw_ctrl_data.is_empty() {
         materialize_table_outer_margin(table, report);
-        materialize_table_page_break(table, report);
         materialize_table_record_attr(table, report);
         materialize_table_record_row_sizes(table, report);
         materialize_table_record_extra(table, report);
@@ -629,7 +777,7 @@ fn materialize_cell_list_header_contract(
     let before_width_ref = cell.list_header_width_ref;
     let before_extra_len = cell.raw_list_extra.len();
 
-    if use_width_ref {
+    if use_width_ref || cell.apply_inner_margin {
         cell.list_header_width_ref |= 0x0001;
     } else {
         cell.list_header_width_ref &= !0x0001;
@@ -662,14 +810,6 @@ fn materialize_table_outer_margin(table: &mut Table, report: &mut AdapterReport)
     }
 }
 
-fn materialize_table_page_break(table: &mut Table, report: &mut AdapterReport) {
-    if matches!(table.page_break, TablePageBreak::CellBreak) {
-        table.page_break = TablePageBreak::RowBreak;
-        table.raw_table_record_attr = 0;
-        report.tables_page_break_materialized += 1;
-    }
-}
-
 fn materialize_table_record_attr(table: &mut Table, report: &mut AdapterReport) {
     let mut attr = match table.page_break {
         TablePageBreak::CellBreak => 0x01,
@@ -681,6 +821,17 @@ fn materialize_table_record_attr(table: &mut Table, report: &mut AdapterReport) 
     }
     if table.attr & 0x08 != 0 {
         attr |= 0x08;
+    }
+    // HWPX inMargin 값만 쓰면 한컴 에디터의 "셀 안쪽 여백 지정"이 꺼진
+    // 상태로 저장된다. HWP5 TABLE attr bit 26을 함께 켜야 해당 여백이
+    // 조판 계약에 참여한다. 공식 5.0 문서에는 이 상위 비트가 명시되어
+    // 있지 않아 aift 정답 HWP와의 교차 검증으로 보존한다.
+    if table.padding.left != 0
+        || table.padding.right != 0
+        || table.padding.top != 0
+        || table.padding.bottom != 0
+    {
+        attr |= 0x0400_0000;
     }
 
     if table.raw_table_record_attr != attr {
@@ -734,34 +885,26 @@ fn materialize_table_ctrl_header_attr(table: &mut Table, report: &mut AdapterRep
     }
 }
 
-/// 셀 `apply_inner_margin` → `list_attr bit 16` 합성 (Stage 3, 보수적).
+/// 셀 `apply_inner_margin` → LIST_HEADER width_ref bit 0 합성 (Stage 3, 보수적).
 ///
 /// ## 배경
 ///
-/// `serializer/control.rs:429` 가 작성하는 LIST_HEADER 의 `list_attr`:
+/// `serializer/control.rs` 가 작성하는 셀 LIST_HEADER 의 앞 8바이트:
 /// ```text
-/// list_attr = (text_direction << 16) | (v_align << 21)
+/// n_para: u16
+/// list_attr: u32
+/// width_ref/property: u16
 /// ```
 ///
-/// HWPX 출처 셀에서 `apply_inner_margin = true` 인 경우, 직렬화 시 `list_attr bit 16` 이
-/// 0 으로 떨어져 한컴이 셀 안 여백을 표 기본값으로 대체하는 손실 발생.
+/// HWPX 출처 셀에서 `apply_inner_margin = true` 인 경우, 직렬화 시 `width_ref bit 0` 이
+/// 0 으로 떨어지면 한컴이 셀 안 여백을 표 기본값으로 대체한다.
 ///
 /// ## 합성 방식
 ///
-/// `cell.text_direction == 0` (가로 = 99% 케이스) AND `apply_inner_margin == true` 일 때만
-/// `text_direction |= 0x01` 합성. 이는 출력 LIST_HEADER 의 bit 16 = 1 을 만들어
-/// 한컴이 `apply_inner_margin` 으로 인식하도록 함. 가로/세로 비트 자체에 영향이 있을 수 있으나,
-/// `apply_inner_margin` 의미가 한컴에서 더 우선 (parser/control.rs:371 동일 로직).
-///
-/// 세로 셀 (`text_direction == 1`) 은 이미 bit 16 = 1 이므로 추가 합성 불필요.
-///
-/// ## 한계
-///
-/// 현재 디버그 샘플 3건 (hwpx-h-0[123].hwpx) 에는 `apply_inner_margin = true` 인 셀이 0건이므로,
-/// 본 함수는 단위 테스트로만 동작 검증 (효과 측정은 후속 샘플에서).
+/// `apply_inner_margin == true`인 경우 `list_header_width_ref |= 0x0001`을 적용한다.
 fn adapt_cell_list_attr(cell: &mut Cell, report: &mut AdapterReport) {
-    if cell.apply_inner_margin && cell.text_direction == 0 {
-        cell.text_direction = 1; // bit 0 OR (출력 bit 16 = 1)
+    if cell.apply_inner_margin && cell.list_header_width_ref & 0x0001 == 0 {
+        cell.list_header_width_ref |= 0x0001;
         report.cells_list_attr_bit16_set += 1;
     }
 }
@@ -825,7 +968,7 @@ mod tests {
                     ..Default::default()
                 })
                 .collect(),
-            page_break: TablePageBreak::CellBreak,
+            page_break: TablePageBreak::RowBreak,
             repeat_header: true,
             attr: 0x08,
             common: CommonObjAttr {
@@ -849,7 +992,7 @@ mod tests {
         let mut report = AdapterReport::new();
         adapt_table(&mut table, &mut report);
 
-        assert_eq!(table.raw_table_record_attr, 0x0000_000e);
+        assert_eq!(table.raw_table_record_attr, 0x0400_000e);
         assert_eq!(table.row_sizes, vec![3]);
         assert_eq!(table.raw_table_record_extra, vec![0, 0]);
         assert_eq!(
@@ -865,6 +1008,30 @@ mod tests {
             ),
             (283, 283, 283, 283)
         );
+    }
+
+    #[test]
+    fn table_break_materializes_hwp5_cell_break_bit() {
+        let mut table = Table {
+            row_count: 1,
+            col_count: 1,
+            cells: vec![Cell {
+                col: 0,
+                row: 0,
+                col_span: 1,
+                row_span: 1,
+                ..Default::default()
+            }],
+            page_break: TablePageBreak::CellBreak,
+            repeat_header: true,
+            ..Default::default()
+        };
+
+        let mut report = AdapterReport::new();
+        adapt_table(&mut table, &mut report);
+
+        assert_eq!(table.raw_table_record_attr & 0x03, 0x01);
+        assert_eq!(table.raw_table_record_attr & 0x04, 0x04);
     }
 
     #[test]
@@ -989,6 +1156,48 @@ mod tests {
     }
 
     #[test]
+    fn following_section_first_paragraph_break_type_materializes_as_page_break() {
+        let mut first_para = Paragraph {
+            raw_break_type: 0x01,
+            ..Default::default()
+        };
+        first_para
+            .controls
+            .push(Control::SectionDef(Box::<SectionDef>::default()));
+
+        let mut following_para = Paragraph {
+            raw_break_type: 0x03,
+            ..Default::default()
+        };
+        following_para
+            .controls
+            .push(Control::SectionDef(Box::<SectionDef>::default()));
+
+        let mut doc = Document {
+            sections: vec![
+                Section {
+                    paragraphs: vec![first_para],
+                    ..Default::default()
+                },
+                Section {
+                    paragraphs: vec![following_para],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let report = convert_hwpx_to_hwp_ir(&mut doc);
+
+        assert_eq!(doc.sections[0].paragraphs[0].raw_break_type, 0x01);
+        assert_eq!(doc.sections[1].paragraphs[0].raw_break_type, 0x04);
+        assert_eq!(report.following_section_break_type_materialized, 1);
+
+        let second = convert_hwpx_to_hwp_ir(&mut doc);
+        assert_eq!(second.following_section_break_type_materialized, 0);
+    }
+
+    #[test]
     fn picture_href_ctrl_data_matches_hancom_parameter_set_shape() {
         let data = build_picture_href_ctrl_data("http://www.korea.kr;1;0;0;");
         assert_eq!(data.len(), 76);
@@ -1029,6 +1238,111 @@ mod tests {
         let mut second = AdapterReport::new();
         adapt_paragraph(&mut para, &mut second);
         assert_eq!(second.picture_href_ctrl_data_materialized, 0);
+    }
+
+    #[test]
+    fn table_layout_ctrl_data_materializes_for_three_by_two_row_break_table() {
+        let mut para = Paragraph::default();
+        para.controls.push(Control::Table(Box::new(Table {
+            row_count: 3,
+            col_count: 2,
+            page_break: TablePageBreak::RowBreak,
+            repeat_header: true,
+            ..Default::default()
+        })));
+
+        let mut report = AdapterReport::new();
+        adapt_paragraph(&mut para, &mut report);
+
+        assert_eq!(report.table_layout_ctrl_data_materialized, 1);
+        assert_eq!(para.ctrl_data_records.len(), 1);
+        let data = para.ctrl_data_records[0].as_ref().unwrap();
+        assert_eq!(data.len(), 104);
+        assert_eq!(&data[0..2], &0x021b_u16.to_le_bytes());
+        assert_eq!(&data[6..8], &0x0242_u16.to_le_bytes());
+        assert_eq!(&data[10..12], &0x0242_u16.to_le_bytes());
+        assert_eq!(&data[12..14], &11_u16.to_le_bytes());
+
+        let mut second = AdapterReport::new();
+        adapt_paragraph(&mut para, &mut second);
+        assert_eq!(second.table_layout_ctrl_data_materialized, 0);
+    }
+
+    #[test]
+    fn table_layout_ctrl_data_does_not_materialize_for_other_table_shapes() {
+        let mut para = Paragraph::default();
+        para.controls.push(Control::Table(Box::new(Table {
+            row_count: 3,
+            col_count: 3,
+            page_break: TablePageBreak::RowBreak,
+            repeat_header: true,
+            ..Default::default()
+        })));
+
+        let mut report = AdapterReport::new();
+        adapt_paragraph(&mut para, &mut report);
+
+        assert_eq!(report.table_layout_ctrl_data_materialized, 0);
+        assert!(para.ctrl_data_records[0].is_none());
+    }
+
+    #[test]
+    fn header_footer_nested_tables_are_materialized() {
+        use crate::model::header_footer::{Footer, Header};
+
+        fn make_table_para() -> Paragraph {
+            let table = Table {
+                row_count: 1,
+                col_count: 1,
+                cells: vec![Cell {
+                    col: 0,
+                    row: 0,
+                    col_span: 1,
+                    row_span: 1,
+                    ..Default::default()
+                }],
+                repeat_header: true,
+                ..Default::default()
+            };
+
+            let mut para = Paragraph::default();
+            para.controls.push(Control::Table(Box::new(table)));
+            para
+        }
+
+        let mut para = Paragraph::default();
+        para.controls.push(Control::Header(Box::new(Header {
+            paragraphs: vec![make_table_para()],
+            ..Default::default()
+        })));
+        para.controls.push(Control::Footer(Box::new(Footer {
+            paragraphs: vec![make_table_para()],
+            ..Default::default()
+        })));
+
+        let mut report = AdapterReport::new();
+        adapt_paragraph(&mut para, &mut report);
+
+        for control in &para.controls {
+            let nested = match control {
+                Control::Header(header) => &header.paragraphs[0].controls[0],
+                Control::Footer(footer) => &footer.paragraphs[0].controls[0],
+                _ => continue,
+            };
+            let Control::Table(table) = nested else {
+                panic!("expected nested table");
+            };
+
+            assert!(!table.raw_ctrl_data.is_empty());
+            assert_eq!(table.raw_table_record_attr & 0x04, 0x04);
+            assert_eq!(table.row_sizes, vec![1]);
+            assert_eq!(table.raw_table_record_extra, vec![0, 0]);
+            assert_eq!(table.cells[0].raw_list_extra.len(), 13);
+        }
+
+        assert_eq!(report.tables_ctrl_data_synthesized, 2);
+        assert_eq!(report.table_record_extra_materialized, 2);
+        assert_eq!(report.cells_list_header_contract_materialized, 2);
     }
 
     #[test]
@@ -1294,21 +1608,25 @@ mod tests {
     }
 
     #[test]
-    fn stage3_horizontal_cell_with_inner_margin_gets_bit16() {
+    fn stage3_cell_with_inner_margin_gets_width_ref_bit0() {
         let mut cell = make_cell_with_inner_margin(true, 0);
         let mut report = AdapterReport::new();
         adapt_cell_list_attr(&mut cell, &mut report);
-        assert_eq!(cell.text_direction, 1, "가로 셀에 bit 16 이 OR 되어야 함");
+        assert_eq!(
+            cell.list_header_width_ref & 0x0001,
+            0x0001,
+            "셀 안쪽 여백 지정은 LIST_HEADER width_ref bit 0으로 저장되어야 함"
+        );
         assert_eq!(report.cells_list_attr_bit16_set, 1);
     }
 
     #[test]
-    fn stage3_vertical_cell_already_has_bit16_no_change() {
-        let mut cell = make_cell_with_inner_margin(true, 1);
+    fn stage3_cell_with_width_ref_bit0_already_set_no_change() {
+        let mut cell = make_cell_with_inner_margin(true, 0);
+        cell.list_header_width_ref = 0x0001;
         let mut report = AdapterReport::new();
         adapt_cell_list_attr(&mut cell, &mut report);
-        // 세로 셀 (text_direction=1) 은 이미 bit 16 = 1 이므로 변경 불필요
-        assert_eq!(cell.text_direction, 1);
+        assert_eq!(cell.list_header_width_ref & 0x0001, 0x0001);
         assert_eq!(report.cells_list_attr_bit16_set, 0);
     }
 
@@ -1317,25 +1635,22 @@ mod tests {
         let mut cell = make_cell_with_inner_margin(false, 0);
         let mut report = AdapterReport::new();
         adapt_cell_list_attr(&mut cell, &mut report);
-        assert_eq!(cell.text_direction, 0);
+        assert_eq!(cell.list_header_width_ref & 0x0001, 0);
         assert_eq!(report.cells_list_attr_bit16_set, 0);
     }
 
     #[test]
-    fn stage3_list_attr_byte_layout_has_bit16_after_adapter() {
-        // serializer/control.rs:429 의 list_attr 합성식과 동일:
-        //   list_attr = (text_direction << 16) | (v_align << 21)
-        // 어댑터가 text_direction=1 으로 만든 후 출력 list_attr 의 bit 16 이 1 인지 확인.
+    fn stage3_list_header_width_ref_layout_has_apply_inner_margin_bit_after_adapter() {
         let mut cell = make_cell_with_inner_margin(true, 0);
         let mut report = AdapterReport::new();
         adapt_cell_list_attr(&mut cell, &mut report);
 
-        let v_align_code: u32 = 0; // VerticalAlign::Top
-        let list_attr: u32 = ((cell.text_direction as u32) << 16) | (v_align_code << 21);
-        assert_eq!(list_attr & (1 << 16), 1 << 16, "list_attr 의 bit 16 = 1");
-
-        // 한컴 파서 해석 (parser/control.rs:371) 와 일치:
-        let recovered_apply_inner_margin = (list_attr >> 16) & 0x01 != 0;
+        assert_eq!(
+            cell.list_header_width_ref & 0x0001,
+            0x0001,
+            "LIST_HEADER bytes 6-7의 bit 0 = 1"
+        );
+        let recovered_apply_inner_margin = cell.list_header_width_ref & 0x0001 != 0;
         assert!(
             recovered_apply_inner_margin,
             "재파싱 시 apply_inner_margin 회복"
@@ -1347,13 +1662,13 @@ mod tests {
         let mut cell = make_cell_with_inner_margin(true, 0);
         let mut r1 = AdapterReport::new();
         adapt_cell_list_attr(&mut cell, &mut r1);
-        // 1차 호출 후 text_direction=1, apply_inner_margin=true
-        assert_eq!(cell.text_direction, 1);
+        // 1차 호출 후 width_ref bit0=1, apply_inner_margin=true
+        assert_eq!(cell.list_header_width_ref & 0x0001, 0x0001);
 
         let mut r2 = AdapterReport::new();
         adapt_cell_list_attr(&mut cell, &mut r2);
-        // 2차 호출은 text_direction == 1 이므로 변경 없음 (가드에 막힘)
-        assert_eq!(cell.text_direction, 1);
+        // 2차 호출은 width_ref bit0이 이미 1이므로 변경 없음
+        assert_eq!(cell.list_header_width_ref & 0x0001, 0x0001);
         assert_eq!(r2.cells_list_attr_bit16_set, 0);
     }
 }

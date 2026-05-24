@@ -99,10 +99,33 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
 
     // 4. section*.xml → Section 변환
     let mut sections = Vec::new();
-    for section_href in &package_info.section_files {
+    for (section_idx, section_href) in package_info.section_files.iter().enumerate() {
         let section_xml = reader.read_file(section_href)?;
         match section::parse_hwpx_section(&section_xml) {
-            Ok(section) => sections.push(section),
+            Ok(mut section) => {
+                if let Some(master_page_files) =
+                    package_info.section_master_page_files.get(section_idx)
+                {
+                    for master_page_href in master_page_files {
+                        match reader.read_file(master_page_href) {
+                            Ok(master_page_xml) => {
+                                match section::parse_hwpx_master_page(&master_page_xml) {
+                                    Ok(master_page) => {
+                                        section.section_def.master_pages.push(master_page);
+                                    }
+                                    Err(e) => {
+                                        eprintln!("경고: {} 파싱 실패: {}", master_page_href, e);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("경고: {} 읽기 실패: {}", master_page_href, e);
+                            }
+                        }
+                    }
+                }
+                sections.push(section);
+            }
             Err(e) => {
                 eprintln!("경고: {} 파싱 실패: {}", section_href, e);
                 sections.push(Section::default());
@@ -110,15 +133,13 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
         }
     }
 
-    // [Task #554] HWP3 변환본 보정: 한글97의 마지막 줄 tolerance 모방
-    // 모든 SectionDef.page_def 의 margin_bottom 을 1600 HU 줄여 한글97 페이지네이션과 정합.
+    // [Task #554] HWP3 변환본 보정: 한글97의 마지막 줄 tolerance 모방.
+    // HWPX→HWP 저장 contract 에서는 PAGE_DEF margin_bottom 원본값을 보존해야 하므로
+    // margin 자체를 줄이지 않고 pagination 전용 tolerance 로만 전달한다.
     if is_hwp3_origin {
         for section in sections.iter_mut() {
-            section.section_def.page_def.margin_bottom = section
-                .section_def
-                .page_def
-                .margin_bottom
-                .saturating_sub(1600);
+            section.section_def.page_def.pagination_bottom_tolerance =
+                section.section_def.page_def.margin_bottom.min(1600);
         }
     }
 

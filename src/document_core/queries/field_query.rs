@@ -796,6 +796,7 @@ fn collect_fields_from_paragraph(
                                 extra_properties: 0,
                                 ctrl_data_name: Some(fname.clone()),
                                 memo_index: 0,
+                                memo_paragraphs: Vec::new(),
                             },
                             location: loc,
                             value,
@@ -1050,6 +1051,7 @@ mod tests {
             ctrl_id,
             ctrl_data_name: None,
             memo_index: 0,
+            memo_paragraphs: Vec::new(),
         })
     }
 

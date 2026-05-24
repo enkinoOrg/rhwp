@@ -447,7 +447,11 @@ fn control_info(record: &Record) -> (Option<String>, Option<String>) {
 }
 
 fn key_payload(record: &Record) -> String {
-    let head_len = record.data.len().min(32);
+    let head_len = if record.tag_id == tags::HWPTAG_CTRL_HEADER && record.data.len() <= 128 {
+        record.data.len()
+    } else {
+        record.data.len().min(32)
+    };
     let head = hex_bytes(&record.data[..head_len]);
 
     if record.tag_id == tags::HWPTAG_CTRL_HEADER && record.data.len() >= 4 {

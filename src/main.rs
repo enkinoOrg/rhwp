@@ -34,6 +34,7 @@ fn main() {
         Some("hwp5-first-para-control-probe") => {
             rhwp::diagnostics::hwp5_first_para_control_probe::run(&args[2..])
         }
+        Some("hwp5-anchor-trace") => rhwp::diagnostics::hwp5_anchor_trace::run(&args[2..]),
         Some("hwp5-cell-header-probe") => {
             rhwp::diagnostics::hwp5_cell_header_probe::run(&args[2..])
         }
@@ -147,6 +148,9 @@ fn print_help() {
     println!();
     println!("  hwp5-first-para-control-probe <oracle.hwp> <generated.hwp> --out-dir <폴더>");
     println!("      첫 문단 control/PARA_TEXT/PARA_CHAR_SHAPE 계약 축별 판정용 HWP probe 생성");
+    println!();
+    println!("  hwp5-anchor-trace <파일.hwp> --needle <텍스트> [--section N] [--window N] [--out <path>]");
+    println!("      특정 텍스트를 포함한 PARA_TEXT 주변의 raw HWP5 record를 추적");
     println!();
     println!("  hwp5-cell-header-probe <oracle.hwp> <generated.hwp> --out-dir <폴더>");
     println!("      표 셀 LIST_HEADER/PARA_HEADER 계약 축별 판정용 HWP probe 생성");
@@ -2105,12 +2109,21 @@ fn dump_controls(args: &[String]) {
                         let spacing = chs.spacings[0]; // 한국어 자간
                         let ratio = chs.ratios[0]; // 한국어 장평
                         println!(
-                            "  [CS] pos={} id={} bold={} spacing={}% ratio={}% char={:?}",
+                            "  [CS] pos={} id={} bold={} spacing={}% ratio={}% base={} attr=0x{:08X} text=#{:06X} shade=#{:06X} shadow=#{:06X} border_fill_id={} shadow_type={} shadow_off=({}, {}) char={:?}",
                             cs.start_pos,
                             cs.char_shape_id,
                             bold,
                             spacing,
                             ratio,
+                            chs.base_size,
+                            chs.attr,
+                            chs.text_color,
+                            chs.shade_color,
+                            chs.shadow_color,
+                            chs.border_fill_id,
+                            chs.shadow_type,
+                            chs.shadow_offset_x,
+                            chs.shadow_offset_y,
                             char_at.map(|c| c.to_string()).unwrap_or_default()
                         );
                     }

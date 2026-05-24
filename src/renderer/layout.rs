@@ -1191,6 +1191,16 @@ impl LayoutEngine {
                     height: layout.page_height,
                 };
                 let body_area = &layout.body_area;
+                // HWP/HWPX에서 `PAGE` 기준은 물리 용지(PAPER)가 아니라 본문 영역 기준이다.
+                // 바탕쪽은 본문보다 먼저 렌더링되므로 표 위치 계산용 현재 페이지 context를
+                // 여기서 명시적으로 채워야 `vertRelTo=PAGE`, `horzRelTo=PAGE`가 올바르게 동작한다.
+                self.current_paper_width.set(layout.page_width);
+                self.current_body_area.set((
+                    body_area.x,
+                    body_area.y,
+                    body_area.width,
+                    body_area.height,
+                ));
                 let mut mp_node = RenderNode::new(
                     mp_id,
                     RenderNodeType::MasterPage,
@@ -1264,8 +1274,8 @@ impl LayoutEngine {
                                         .get(para.para_shape_id as usize)
                                         .map(|s| s.alignment)
                                         .unwrap_or(Alignment::Left);
-                                    // 바탕쪽 표: paper_area를 col_area로 전달하여
-                                    // compute_table_x/y_position이 올바르게 위치 계산
+                                    // 바탕쪽 표: PAPER 기준은 paper_area, PAGE 기준은 위에서 설정한
+                                    // current_body_area를 통해 본문 영역으로 계산된다.
                                     self.layout_table(
                                         tree,
                                         &mut mp_node,
@@ -2591,7 +2601,7 @@ impl LayoutEngine {
                     let any_w = bs
                         .borders
                         .iter()
-                        .any(|b| !matches!(b.line_type, BorderLineType::None) && b.width > 0);
+                        .any(|b| !matches!(b.line_type, BorderLineType::None));
                     if any_w {
                         Some((top.line_type, top.width, top.color))
                     } else {
@@ -2747,7 +2757,6 @@ impl LayoutEngine {
                     let (stroke_color, stroke_width) = if let Some(bs) = border_style {
                         let any_real_width = bs.borders.iter().any(|b| {
                             !matches!(b.line_type, crate::model::style::BorderLineType::None)
-                                && b.width > 0
                         });
                         if any_real_width {
                             let top = &bs.borders[2];

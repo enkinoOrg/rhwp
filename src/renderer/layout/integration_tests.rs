@@ -101,6 +101,38 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_1098_hwpx_last_page_master_replaces_base_master() {
+        let Some(core) = load_document("samples/hwpx/exam-kor-2p.hwpx") else {
+            return;
+        };
+
+        let page = core
+            .pagination
+            .first()
+            .and_then(|r| r.pages.get(1))
+            .expect("exam-kor-2p.hwpx 2페이지 존재");
+        let active_mp = page
+            .active_master_page
+            .as_ref()
+            .expect("2페이지에는 LAST_PAGE 바탕쪽이 적용되어야 함");
+        let master_page = core
+            .document()
+            .sections
+            .get(active_mp.section_index)
+            .and_then(|s| s.section_def.master_pages.get(active_mp.master_page_index))
+            .expect("active master page 참조 유효");
+
+        assert!(
+            master_page.is_extension && master_page.replace_base,
+            "HWPX LAST_PAGE pageDuplicate=0은 기본 홀/짝 바탕쪽에 추가하지 않고 대체해야 함"
+        );
+        assert!(
+            page.extra_master_pages.is_empty(),
+            "기본 홀수 바탕쪽과 LAST_PAGE 바탕쪽을 동시에 렌더링하면 제목/쪽번호가 중복됨"
+        );
+    }
+
     // ─── 표 분할(PartialTable) 검증 ───
 
     #[test]

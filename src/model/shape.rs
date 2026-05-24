@@ -544,6 +544,8 @@ pub struct PolygonShape {
     pub drawing: DrawingObjAttr,
     /// 꼭짓점 좌표 목록
     pub points: Vec<Point>,
+    /// SHAPE_POLYGON 끝 패딩/추가 바이트 (라운드트립 보존)
+    pub raw_trailing: Vec<u8>,
 }
 
 /// 곡선 개체 (HWPTAG_SHAPE_COMPONENT_CURVE)

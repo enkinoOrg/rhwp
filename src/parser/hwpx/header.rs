@@ -148,6 +148,9 @@ pub fn parse_hwpx_header(xml: &str) -> Result<(DocInfo, DocProperties), HwpxErro
                     b"memoPr" => {
                         parse_memo_shape(e, &mut doc_info);
                     }
+                    b"linkinfo" => {
+                        parse_doc_option_linkinfo(e, &mut doc_info);
+                    }
                     // [Task #1058 후속] BULLET 누락 시 한컴이 default 글머리표를 본문
                     // paragraph 에 자동 부여. HWPX `<hh:bullet id="N" char="❏" useImage="0">`
                     // 4개 → HWP BULLET record 4개. 누락 시 일반 문단 시작 글머리표 부작용.
@@ -180,6 +183,9 @@ pub fn parse_hwpx_header(xml: &str) -> Result<(DocInfo, DocProperties), HwpxErro
                     b"memoPr" => {
                         parse_memo_shape(e, &mut doc_info);
                     }
+                    b"linkinfo" => {
+                        parse_doc_option_linkinfo(e, &mut doc_info);
+                    }
                     _ => {}
                 }
             }
@@ -193,6 +199,80 @@ pub fn parse_hwpx_header(xml: &str) -> Result<(DocInfo, DocProperties), HwpxErro
     doc_props.section_count = 1; // content.hpf에서 갱신됨
 
     Ok((doc_info, doc_props))
+}
+
+fn parse_doc_option_linkinfo(e: &quick_xml::events::BytesStart, doc_info: &mut DocInfo) {
+    let mut page_inherit = false;
+    let mut footnote_inherit = false;
+
+    for attr in e.attributes().flatten() {
+        match attr.key.as_ref() {
+            b"pageInherit" => page_inherit = parse_bool(&attr),
+            b"footnoteInherit" => footnote_inherit = parse_bool(&attr),
+            _ => {}
+        }
+    }
+
+    if !page_inherit && !footnote_inherit {
+        return;
+    }
+
+    let mut data = Vec::with_capacity(80);
+    data.extend_from_slice(&0x021c_u16.to_le_bytes());
+    data.extend_from_slice(&1_u16.to_le_bytes());
+    data.extend_from_slice(&0_u16.to_le_bytes());
+    data.extend_from_slice(&0x0207_u16.to_le_bytes());
+    data.extend_from_slice(&0x8000_u16.to_le_bytes());
+    data.extend_from_slice(&0x0207_u16.to_le_bytes());
+    data.extend_from_slice(&8_u16.to_le_bytes());
+    data.extend_from_slice(&0_u16.to_le_bytes());
+
+    let items = [
+        (0x400a_u16, 0x0006_u16, 0_u32),
+        (0x400e_u16, 0x0006_u16, 0_u32),
+        (0x4006_u16, 0x0006_u16, u32::from(page_inherit)),
+        (0x4010_u16, 0x0007_u16, u32::from(footnote_inherit)),
+        (0x401a_u16, 0x0006_u16, 0_u32),
+        (0x401d_u16, 0x0006_u16, 0_u32),
+        (0x401f_u16, 0x0007_u16, 100_u32),
+        (0x4020_u16, 0x0007_u16, 100_u32),
+    ];
+
+    for (item_id, item_type, value) in items {
+        data.extend_from_slice(&item_id.to_le_bytes());
+        data.extend_from_slice(&item_type.to_le_bytes());
+        data.extend_from_slice(&value.to_le_bytes());
+    }
+
+    doc_info.extra_records.push(RawRecord {
+        tag_id: tags::HWPTAG_DOC_DATA,
+        level: 0,
+        data,
+    });
+    doc_info.extra_records.push(RawRecord {
+        tag_id: tags::HWPTAG_FORBIDDEN_CHAR,
+        level: 1,
+        data: vec![0; 16],
+    });
+
+    doc_info.extra_records.push(RawRecord {
+        tag_id: tags::HWPTAG_COMPATIBLE_DOCUMENT,
+        level: 0,
+        data: vec![0; 4],
+    });
+    doc_info.extra_records.push(RawRecord {
+        tag_id: tags::HWPTAG_LAYOUT_COMPATIBILITY,
+        level: 1,
+        data: vec![0; 20],
+    });
+
+    let mut track_change = vec![0; 1032];
+    track_change[..4].copy_from_slice(&56_u32.to_le_bytes());
+    doc_info.extra_records.push(RawRecord {
+        tag_id: tags::HWPTAG_TRACKCHANGE,
+        level: 1,
+        data: track_change,
+    });
 }
 
 fn parse_memo_shape(e: &quick_xml::events::BytesStart, doc_info: &mut DocInfo) {
@@ -240,7 +320,9 @@ fn parse_memo_shape(e: &quick_xml::events::BytesStart, doc_info: &mut DocInfo) {
 
 fn parse_memo_line_type(value: &str) -> u8 {
     match value {
-        "SOLID" => 0,
+        // HWPX memoPr lineType uses the OWPML name, but HWP5 MEMO_SHAPE stores
+        // the Hancom memo line enum where 0 means "no/unknown" and SOLID is 1.
+        "SOLID" => 1,
         "DOT" => 1,
         "DASH_DOT" => 2,
         "DASH" => 3,
@@ -507,6 +589,8 @@ fn parse_char_shape(
                                         };
                                     }
                                     b"color" => cs.shadow_color = parse_color(&attr),
+                                    b"offsetX" => cs.shadow_offset_x = parse_i8(&attr),
+                                    b"offsetY" => cs.shadow_offset_y = parse_i8(&attr),
                                     _ => {}
                                 }
                             }
@@ -685,6 +769,20 @@ fn parse_para_shape_child(
                     b"offsetRight" => ps.border_spacing[1] = parse_i16(&attr),
                     b"offsetTop" => ps.border_spacing[2] = parse_i16(&attr),
                     b"offsetBottom" => ps.border_spacing[3] = parse_i16(&attr),
+                    b"connect" => {
+                        if parse_bool(&attr) {
+                            ps.attr1 |= 1 << 28;
+                        } else {
+                            ps.attr1 &= !(1 << 28);
+                        }
+                    }
+                    b"ignoreMargin" => {
+                        if parse_bool(&attr) {
+                            ps.attr1 |= 1 << 29;
+                        } else {
+                            ps.attr1 &= !(1 << 29);
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -1674,6 +1772,40 @@ mod tests {
                 0xc0, 0xdb, 0xfb, 0x00, 0x00, 0x00, 0x00, 0x00,
             ]
         );
+    }
+
+    #[test]
+    fn test_parse_hwpx_memo_shape_solid_line_type_uses_hwp5_value() {
+        assert_eq!(parse_memo_line_type("SOLID"), 1);
+        assert_eq!(parse_memo_line_type("DASH"), 3);
+    }
+
+    #[test]
+    fn test_parse_char_pr_preserves_shadow_offsets_even_when_shadow_is_none() {
+        let xml = r##"<?xml version="1.0" encoding="UTF-8"?>
+<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">
+  <hh:refList>
+    <hh:fontfaces itemCnt="1">
+      <hh:fontface lang="HANGUL" fontCnt="1">
+        <hh:font id="0" face="함초롬바탕" type="TTF"/>
+      </hh:fontface>
+    </hh:fontfaces>
+    <hh:charProperties itemCnt="1">
+      <hh:charPr id="0" height="1200" textColor="#000000" shadeColor="none" useFontSpace="0" useKerning="0" symMark="NONE">
+        <hh:fontRef hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"/>
+        <hh:shadow type="NONE" color="#C0C0C0" offsetX="10" offsetY="10"/>
+      </hh:charPr>
+    </hh:charProperties>
+  </hh:refList>
+</hh:head>"##;
+
+        let (doc_info, _) = parse_hwpx_header(xml).unwrap();
+        let cs = &doc_info.char_shapes[0];
+
+        assert_eq!(cs.shadow_type, 0);
+        assert_eq!(cs.shadow_color, 0x00C0C0C0);
+        assert_eq!(cs.shadow_offset_x, 10);
+        assert_eq!(cs.shadow_offset_y, 10);
     }
 
     #[test]
