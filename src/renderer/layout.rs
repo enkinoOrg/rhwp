@@ -259,7 +259,7 @@ pub(crate) use paragraph_layout::ensure_min_baseline;
 // [Task #826] map_pua_bullet_char 는 통합 테스트 (tests/issue_826.rs) 에서 직접 검증
 // (PUA substitution 매핑 정합) — pub 노출.
 pub use paragraph_layout::map_pua_bullet_char;
-pub(crate) use utils::{resolve_numbering_id, find_bin_data, drawing_to_shape_style, drawing_to_line_style, layout_rect_to_bbox, format_page_number};
+pub(crate) use utils::{resolve_numbering_id, find_bin_data, drawing_to_shape_style, drawing_to_line_style, layout_rect_to_bbox, format_page_number, picture_display_size_hu};
 pub(crate) use border_rendering::{border_width_to_px, create_border_line_nodes};
 
 #[cfg(test)]
@@ -3550,8 +3550,10 @@ impl LayoutEngine {
                             //  pic_emit_x=767 > col_right=759 → +274px advance → 문9 처짐)
                             // Picture 의 좌측 edge (x) 가 col_area 우측을 초과하면 advance skip.
                             if matches!(pic.common.horz_rel_to, HorzRelTo::Column) {
-                                let pic_width_px = hwpunit_to_px(pic.common.width as i32, self.dpi);
-                                let h_offset_px = hwpunit_to_px(pic.common.horizontal_offset as i32, self.dpi);
+                                let (pic_width_hu, _) = picture_display_size_hu(pic);
+                                let pic_width_px = hwpunit_to_px(pic_width_hu, self.dpi);
+                                let h_offset_px =
+                                    hwpunit_to_px(pic.common.horizontal_offset as i32, self.dpi);
                                 let pic_emit_x = match pic.common.horz_align {
                                     crate::model::shape::HorzAlign::Left
                                     | crate::model::shape::HorzAlign::Inside =>
