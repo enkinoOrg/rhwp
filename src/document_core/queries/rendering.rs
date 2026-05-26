@@ -912,6 +912,213 @@ impl DocumentCore {
         Ok(format!("{{\"ok\":true,\"pageCount\":{}}}", page_count))
     }
 
+    /// 구역의 쪽 테두리/배경 설정을 JSON으로 반환한다.
+    pub fn get_page_border_fill_native(&self, section_idx: usize) -> Result<String, HwpError> {
+        use crate::document_core::helpers::{border_line_type_to_u8_val, color_ref_to_css};
+        use crate::model::page::PageBorderBasis;
+        use crate::model::style::FillType;
+
+        let section = self
+            .document
+            .sections
+            .get(section_idx)
+            .ok_or_else(|| HwpError::RenderError(format!("구역 {} 범위 초과", section_idx)))?;
+        let pbf = &section.section_def.page_border_fill;
+        let basis = match pbf.basis {
+            PageBorderBasis::PaperBased => "paper",
+            PageBorderBasis::BodyBased => "page",
+        };
+        let fill_area = match (pbf.attr >> 3) & 0x03 {
+            1 => "page",
+            2 => "border",
+            _ => "paper",
+        };
+        let mut border_json = concat!(
+            "\"borderLeft\":{\"type\":0,\"width\":0,\"color\":\"#000000\"},",
+            "\"borderRight\":{\"type\":0,\"width\":0,\"color\":\"#000000\"},",
+            "\"borderTop\":{\"type\":0,\"width\":0,\"color\":\"#000000\"},",
+            "\"borderBottom\":{\"type\":0,\"width\":0,\"color\":\"#000000\"},",
+            "\"fillType\":\"none\",\"fillColor\":\"#ffffff\",\"patternColor\":\"#000000\",\"patternType\":0"
+        )
+        .to_string();
+
+        if pbf.border_fill_id > 0 {
+            if let Some(bf) = self
+                .document
+                .doc_info
+                .border_fills
+                .get((pbf.border_fill_id - 1) as usize)
+            {
+                let dir_names = ["Left", "Right", "Top", "Bottom"];
+                let borders = bf
+                    .borders
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, border)| {
+                        format!(
+                            "\"border{}\":{{\"type\":{},\"width\":{},\"color\":\"{}\"}}",
+                            dir_names[idx],
+                            border_line_type_to_u8_val(border.line_type),
+                            border.width,
+                            color_ref_to_css(border.color)
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let (fill_type, fill_color, pattern_color, pattern_type) =
+                    match (&bf.fill.fill_type, &bf.fill.solid) {
+                        (FillType::Solid, Some(solid)) => (
+                            "solid",
+                            color_ref_to_css(solid.background_color),
+                            color_ref_to_css(solid.pattern_color),
+                            solid.pattern_type,
+                        ),
+                        _ => ("none", "#ffffff".to_string(), "#000000".to_string(), 0),
+                    };
+                border_json = format!(
+                    "{},\"fillType\":\"{}\",\"fillColor\":\"{}\",\"patternColor\":\"{}\",\"patternType\":{}",
+                    borders, fill_type, fill_color, pattern_color, pattern_type
+                );
+            }
+        }
+
+        Ok(format!(
+            "{{\"attr\":{},\"basis\":\"{}\",\"spacingLeft\":{},\"spacingRight\":{},\"spacingTop\":{},\"spacingBottom\":{},\
+            \"borderFillId\":{},\"headerInside\":{},\"footerInside\":{},\"fillArea\":\"{}\",\
+            \"hideBorder\":{},\"hideFill\":{},{} }}",
+            pbf.attr,
+            basis,
+            pbf.spacing_left,
+            pbf.spacing_right,
+            pbf.spacing_top,
+            pbf.spacing_bottom,
+            pbf.border_fill_id,
+            (pbf.attr & 0x02) != 0,
+            (pbf.attr & 0x04) != 0,
+            fill_area,
+            section.section_def.hide_border,
+            section.section_def.hide_fill,
+            border_json,
+        ))
+    }
+
+    /// 구역의 쪽 테두리/배경 설정을 JSON에서 업데이트하고 재조판한다.
+    pub fn set_page_border_fill_native(
+        &mut self,
+        section_idx: usize,
+        json: &str,
+    ) -> Result<String, HwpError> {
+        use crate::document_core::helpers::{json_bool, json_i16, json_str, json_u32};
+        use crate::model::page::PageBorderBasis;
+
+        let border_fill_id = self.create_border_fill_from_json(json);
+        let section = self
+            .document
+            .sections
+            .get_mut(section_idx)
+            .ok_or_else(|| HwpError::RenderError(format!("구역 {} 범위 초과", section_idx)))?;
+        let sd = &mut section.section_def;
+        let pbf = &mut sd.page_border_fill;
+
+        if let Some(v) = json_i16(json, "spacingLeft") {
+            pbf.spacing_left = v;
+        }
+        if let Some(v) = json_i16(json, "spacingRight") {
+            pbf.spacing_right = v;
+        }
+        if let Some(v) = json_i16(json, "spacingTop") {
+            pbf.spacing_top = v;
+        }
+        if let Some(v) = json_i16(json, "spacingBottom") {
+            pbf.spacing_bottom = v;
+        }
+
+        let mut attr = pbf.attr;
+        if let Some(basis) = json_str(json, "basis") {
+            if basis == "paper" {
+                pbf.basis = PageBorderBasis::PaperBased;
+                attr |= 0x01;
+            } else {
+                pbf.basis = PageBorderBasis::BodyBased;
+                attr &= !0x01;
+            }
+        }
+        if let Some(v) = json_bool(json, "headerInside") {
+            if v {
+                attr |= 0x02;
+            } else {
+                attr &= !0x02;
+            }
+        }
+        if let Some(v) = json_bool(json, "footerInside") {
+            if v {
+                attr |= 0x04;
+            } else {
+                attr &= !0x04;
+            }
+        }
+        if let Some(area) = json_str(json, "fillArea") {
+            attr &= !(0x03 << 3);
+            attr |= match area.as_str() {
+                "page" => 0x01 << 3,
+                "border" => 0x02 << 3,
+                _ => 0,
+            };
+        }
+        pbf.attr = attr;
+        pbf.border_fill_id = border_fill_id;
+
+        let apply_page = json_str(json, "applyPage").unwrap_or_else(|| "all".to_string());
+        let hide_first = apply_page == "exceptFirst";
+        if let Some(v) = json_bool(json, "hideBorder") {
+            sd.hide_border = v;
+        } else {
+            sd.hide_border = hide_first;
+        }
+        if let Some(v) = json_bool(json, "hideFill") {
+            sd.hide_fill = v;
+        } else {
+            sd.hide_fill = hide_first;
+        }
+
+        let flags = &mut sd.flags;
+        if pbf.basis == PageBorderBasis::PaperBased {
+            pbf.attr |= 0x01;
+        } else {
+            pbf.attr &= !0x01;
+        }
+        if sd.hide_border {
+            *flags |= 0x0008;
+        } else {
+            *flags &= !0x0008;
+        }
+        if sd.hide_fill {
+            *flags |= 0x0010;
+        } else {
+            *flags &= !0x0010;
+        }
+        if let Some(raw) = json_u32(json, "attr") {
+            pbf.attr = (pbf.attr & 0x0000_001f) | (raw & !0x0000_001f);
+        }
+
+        let updated_sd = sd.clone();
+        if let Some(para) = section.paragraphs.get_mut(0) {
+            for ctrl in &mut para.controls {
+                if let Control::SectionDef(ref mut ctrl_sd) = ctrl {
+                    ctrl_sd.page_border_fill = updated_sd.page_border_fill.clone();
+                    ctrl_sd.hide_border = updated_sd.hide_border;
+                    ctrl_sd.hide_fill = updated_sd.hide_fill;
+                    ctrl_sd.flags = updated_sd.flags;
+                    break;
+                }
+            }
+        }
+
+        section.raw_stream = None;
+        let page_count = self.recompose_and_paginate();
+        Ok(format!("{{\"ok\":true,\"pageCount\":{}}}", page_count))
+    }
+
     /// 구역의 용지 설정(PageDef)을 HWPUNIT 원본값으로 반환 (네이티브 에러 타입)
     pub fn get_page_def_native(&self, section_idx: usize) -> Result<String, HwpError> {
         let section = self
@@ -3375,6 +3582,49 @@ mod tests {
         assert_eq!(core.get_bin_data(0), Some(&[0x01, 0x02, 0x03][..]));
         assert_eq!(core.get_bin_data(1), Some(&[0xAA, 0xBB][..]));
         assert_eq!(core.get_bin_data(2), None);
+    }
+
+    #[test]
+    fn page_border_fill_api_updates_basis_spacing_and_border() {
+        use crate::model::document::{Document, Section, SectionDef};
+        use crate::model::paragraph::Paragraph;
+
+        let mut core = DocumentCore::new_empty();
+        let mut document = Document::default();
+        document.sections.push(Section {
+            section_def: SectionDef::default(),
+            paragraphs: vec![Paragraph::default()],
+            raw_stream: None,
+        });
+        core.set_document(document);
+        core.paginate();
+
+        let result = core
+            .set_page_border_fill_native(
+                0,
+                r##"{"basis":"page","spacingLeft":567,"spacingRight":567,"spacingTop":567,"spacingBottom":567,
+                "borderLeft":{"type":1,"width":1,"color":"#000000"},
+                "borderRight":{"type":1,"width":1,"color":"#000000"},
+                "borderTop":{"type":1,"width":1,"color":"#000000"},
+                "borderBottom":{"type":1,"width":1,"color":"#000000"},
+                "fillType":"solid","fillColor":"#ffffff","patternColor":"#000000","patternType":0,
+                "fillArea":"paper","applyPage":"all"}"##,
+            )
+            .expect("page border fill should update");
+        assert!(result.contains("\"ok\":true"));
+
+        let json = core
+            .get_page_border_fill_native(0)
+            .expect("page border fill should be queryable");
+        assert!(json.contains("\"basis\":\"page\""));
+        assert!(json.contains("\"spacingTop\":567"));
+        assert!(json.contains("\"borderFillId\":"));
+        assert!(json.contains("\"borderTop\":{\"type\":1"));
+
+        let info = core
+            .get_page_info_native(0)
+            .expect("page info should reflect updated page border");
+        assert!(info.contains("\"pageBorderTop\":"));
     }
 
     #[cfg(not(target_arch = "wasm32"))]

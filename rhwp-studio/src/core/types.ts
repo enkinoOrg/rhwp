@@ -56,6 +56,37 @@ export interface PageDef {
   binding: number;
 }
 
+export interface BorderLineProps {
+  type: number;
+  width: number;
+  color: string;
+}
+
+/** WASM getPageBorderFill() 반환 타입 */
+export interface PageBorderFillSettings {
+  attr: number;
+  basis: 'paper' | 'page';
+  spacingLeft: number;
+  spacingRight: number;
+  spacingTop: number;
+  spacingBottom: number;
+  borderFillId: number;
+  headerInside: boolean;
+  footerInside: boolean;
+  fillArea: 'paper' | 'page' | 'border';
+  hideBorder: boolean;
+  hideFill: boolean;
+  borderLeft: BorderLineProps;
+  borderRight: BorderLineProps;
+  borderTop: BorderLineProps;
+  borderBottom: BorderLineProps;
+  fillType: 'none' | 'solid' | string;
+  fillColor: string;
+  patternColor: string;
+  patternType: number;
+  applyPage?: 'all' | 'exceptFirst' | 'firstOnly';
+}
+
 /** 구역 정의 (SectionDef) */
 export interface SectionDef {
   pageNum: number;
