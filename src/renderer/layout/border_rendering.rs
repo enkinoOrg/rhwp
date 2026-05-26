@@ -532,6 +532,26 @@ fn create_single_line(
     )]
 }
 
+/// BorderLine이 시각적으로 차지하는 전체 폭(px).
+///
+/// `create_border_line_nodes`의 이중선/삼중선 분해 규칙과 같은 값을 써서,
+/// 쪽 기준 테두리 박스를 바깥쪽으로 확장할 때 렌더된 선 묶음이 본문 쪽으로
+/// 파고들지 않게 한다.
+pub(crate) fn border_line_visual_span(border: &BorderLine) -> f64 {
+    if border.line_type == BorderLineType::None {
+        return 0.0;
+    }
+
+    let base_width = border_width_to_px(border.width);
+    match border.line_type {
+        BorderLineType::Double
+        | BorderLineType::ThinThickDouble
+        | BorderLineType::ThickThinDouble => base_width.max(3.0),
+        BorderLineType::ThinThickThinTriple => base_width.max(4.0),
+        _ => base_width,
+    }
+}
+
 /// HWP 테두리 굵기 인덱스 → 픽셀 변환
 /// HWP 스펙 (표 28): mm 값을 96dpi 기준 px로 변환
 pub(crate) fn border_width_to_px(width: u8) -> f64 {

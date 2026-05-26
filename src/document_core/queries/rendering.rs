@@ -699,6 +699,7 @@ impl DocumentCore {
     pub fn get_page_info_native(&self, page_num: u32) -> Result<String, HwpError> {
         use crate::model::page::PageBorderBasis;
         use crate::renderer::hwpunit_to_px;
+        use crate::renderer::layout::border_line_visual_span;
         let (page_content, _, _) = self.find_page(page_num)?;
         let sec_idx = page_content.section_index;
         let section_def = &self.document.sections[sec_idx].section_def;
@@ -716,14 +717,34 @@ impl DocumentCore {
         let pbf_bottom = hwpunit_to_px(page_border_fill.spacing_bottom as i32, self.dpi);
         let body_top = mt + mh;
         let body_bottom_margin = mb + mf;
+        let visual_outsets = if matches!(page_border_fill.basis, PageBorderBasis::BodyBased)
+            && page_border_fill.border_fill_id > 0
+        {
+            self.document
+                .doc_info
+                .border_fills
+                .get((page_border_fill.border_fill_id - 1) as usize)
+                .map(|bf| {
+                    (
+                        border_line_visual_span(&bf.borders[0]),
+                        border_line_visual_span(&bf.borders[1]),
+                        border_line_visual_span(&bf.borders[2]),
+                        border_line_visual_span(&bf.borders[3]),
+                    )
+                })
+                .unwrap_or((0.0, 0.0, 0.0, 0.0))
+        } else {
+            (0.0, 0.0, 0.0, 0.0)
+        };
+        let (out_l, out_r, out_t, out_b) = visual_outsets;
         let (page_border_left, page_border_right, page_border_top, page_border_bottom) =
             match page_border_fill.basis {
                 PageBorderBasis::PaperBased => (pbf_left, pbf_right, pbf_top, pbf_bottom),
                 PageBorderBasis::BodyBased => (
-                    (ml - pbf_left).max(0.0),
-                    (mr - pbf_right).max(0.0),
-                    (body_top - pbf_top).max(0.0),
-                    (body_bottom_margin - pbf_bottom).max(0.0),
+                    (ml - pbf_left - out_l).max(0.0),
+                    (mr - pbf_right - out_r).max(0.0),
+                    (body_top - pbf_top - out_t).max(0.0),
+                    (body_bottom_margin - pbf_bottom - out_b).max(0.0),
                 ),
             };
         // 단별 영역 정보
@@ -3687,8 +3708,8 @@ mod tests {
             "쪽 기준 border top should be inside paper 기준: paper={paper_hwp_top}, page={page_hwp_top}"
         );
         assert!(
-            (sample16_top - 56.7).abs() < 0.2,
-            "sample16 page-basis UI should render from the body-area edge: top={sample16_top}"
+            (sample16_top - 53.7).abs() < 0.2,
+            "sample16 page-basis UI should include the visual line span outset: top={sample16_top}"
         );
     }
 

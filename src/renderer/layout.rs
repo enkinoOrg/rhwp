@@ -387,7 +387,9 @@ pub(crate) use text_measurement::{
 };
 // [Task #826] map_pua_bullet_char 는 통합 테스트 (tests/issue_826.rs) 에서 직접 검증
 // (PUA substitution 매핑 정합) — pub 노출.
-pub(crate) use border_rendering::{border_width_to_px, create_border_line_nodes};
+pub(crate) use border_rendering::{
+    border_line_visual_span, border_width_to_px, create_border_line_nodes,
+};
 pub use paragraph_layout::map_pua_bullet_char;
 pub(crate) use utils::{
     drawing_to_line_style, drawing_to_shape_style, find_bin_data, format_page_number,
@@ -1238,6 +1240,7 @@ impl LayoutEngine {
                         pbf.spacing_left, pbf.spacing_right, pbf.spacing_top, pbf.spacing_bottom,
                     );
                 }
+                let borders = &bs.borders;
                 let (base_x, base_y, base_w, base_h) = if paper_based {
                     (0.0, 0.0, layout.page_width, layout.page_height)
                 } else {
@@ -1253,8 +1256,18 @@ impl LayoutEngine {
                 let sp_r = hwpunit_to_px(pbf.spacing_right as i32, self.dpi);
                 let sp_t = hwpunit_to_px(pbf.spacing_top as i32, self.dpi);
                 let sp_b = hwpunit_to_px(pbf.spacing_bottom as i32, self.dpi);
+                let (out_l, out_r, out_t, out_b) = if paper_based {
+                    (0.0, 0.0, 0.0, 0.0)
+                } else {
+                    (
+                        border_line_visual_span(&borders[0]),
+                        border_line_visual_span(&borders[1]),
+                        border_line_visual_span(&borders[2]),
+                        border_line_visual_span(&borders[3]),
+                    )
+                };
                 // 종이 기준: 종이 가장자리에서 안쪽(+)으로 spacing
-                // 쪽 기준: 본문 영역에서 바깥쪽(-)으로 spacing
+                // 쪽 기준: 본문 영역에서 바깥쪽(-)으로 spacing + 선 묶음 폭만큼 확장
                 let (bx, by, bw, bh) = if paper_based {
                     (
                         base_x + sp_l,
@@ -1264,14 +1277,13 @@ impl LayoutEngine {
                     )
                 } else {
                     (
-                        base_x - sp_l,
-                        base_y - sp_t,
-                        base_w + sp_l + sp_r,
-                        base_h + sp_t + sp_b,
+                        base_x - sp_l - out_l,
+                        base_y - sp_t - out_t,
+                        base_w + sp_l + sp_r + out_l + out_r,
+                        base_h + sp_t + sp_b + out_t + out_b,
                     )
                 };
 
-                let borders = &bs.borders;
                 let top_nodes = create_border_line_nodes(tree, &borders[2], bx, by, bx + bw, by);
                 for n in top_nodes {
                     tree.root.children.push(n);
