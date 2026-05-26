@@ -2,6 +2,7 @@ use super::*;
 use crate::model::document::{Document, Section};
 use crate::model::paragraph::{LineSeg, Paragraph};
 use crate::paint::LAYER_TREE_SCHEMA;
+use crate::parser::control::parse_common_obj_attr;
 
 #[test]
 fn test_create_empty_document() {
@@ -2370,14 +2371,37 @@ fn test_paste_html_table_as_control() {
         ]);
         assert_eq!(inst, 0x80000000, "table para instance_id=0x80000000");
 
-        // DIFF-7: CTRL_HEADER instance_id (raw_ctrl_data[28..32]) 가 0이 아닌지 검증
-        assert!(tbl.raw_ctrl_data.len() >= 32, "raw_ctrl_data >= 32 bytes");
-        let ctrl_instance_id = u32::from_le_bytes([
-            tbl.raw_ctrl_data[28],
-            tbl.raw_ctrl_data[29],
-            tbl.raw_ctrl_data[30],
-            tbl.raw_ctrl_data[31],
-        ]);
+        // DIFF-7: CTRL_HEADER instance_id (raw_ctrl_data[32..36]) 가 0이 아닌지 검증
+        assert!(tbl.raw_ctrl_data.len() >= 36, "raw_ctrl_data >= 36 bytes");
+        let common = parse_common_obj_attr(&tbl.raw_ctrl_data);
+        assert_eq!(
+            common.attr, tbl.attr,
+            "HTML table raw_ctrl_data[0..4] must carry CommonObjAttr attr"
+        );
+        assert_eq!(
+            (common.width, common.height),
+            (
+                tbl.get_column_widths().iter().sum(),
+                tbl.get_row_heights().iter().sum()
+            ),
+            "HTML table raw_ctrl_data width/height offsets must match parser layout"
+        );
+        assert_eq!(
+            (
+                common.margin.left,
+                common.margin.right,
+                common.margin.top,
+                common.margin.bottom
+            ),
+            (
+                tbl.outer_margin_left,
+                tbl.outer_margin_right,
+                tbl.outer_margin_top,
+                tbl.outer_margin_bottom
+            ),
+            "HTML table raw_ctrl_data margin offsets must match parser layout"
+        );
+        let ctrl_instance_id = common.instance_id;
         assert_ne!(
             ctrl_instance_id, 0,
             "DIFF-7: CTRL_HEADER instance_id != 0 (got 0x{:08X})",
@@ -15258,12 +15282,7 @@ fn test_parse_table_html_save() {
         );
 
         // DIFF-7: instance_id
-        let inst = u32::from_le_bytes([
-            tbl.raw_ctrl_data[28],
-            tbl.raw_ctrl_data[29],
-            tbl.raw_ctrl_data[30],
-            tbl.raw_ctrl_data[31],
-        ]);
+        let inst = parse_common_obj_attr(&tbl.raw_ctrl_data).instance_id;
         eprintln!("  DIFF-7: instance_id=0x{:08X}", inst);
         assert_ne!(inst, 0, "DIFF-7: instance_id != 0");
 
