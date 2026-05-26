@@ -4,13 +4,20 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      publish_extensions:
+        description: 'Publish VSCode Marketplace and Open VSX extensions'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write
 
 jobs:
   build-wasm:
     name: Build WASM
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
 
     steps:
       - uses: actions/checkout@v5
@@ -47,9 +54,7 @@ jobs:
     name: Publish @rhwp/core
     needs: build-wasm
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
+    environment: NPM_TOKEN
 
     steps:
       - uses: actions/checkout@v5
@@ -67,20 +72,24 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: 24
-          registry-url: 'https://registry.npmjs.org'
           package-manager-cache: false
 
       - name: Publish to npm
         working-directory: pkg
-        run: npm publish --access public
+        run: |
+          package_name=$(node -p "require('./package.json').name")
+          package_version=$(node -p "require('./package.json').version")
+          if npm view "${package_name}@${package_version}" version >/dev/null 2>&1; then
+            echo "${package_name}@${package_version} already exists; skipping publish"
+          else
+            npm publish --access public
+          fi
 
   publish-npm-editor:
     name: Publish @rhwp/editor
     needs: build-wasm
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
+    environment: NPM_TOKEN
 
     steps:
       - uses: actions/checkout@v5
@@ -89,19 +98,24 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: 24
-          registry-url: 'https://registry.npmjs.org'
           package-manager-cache: false
 
       - name: Publish to npm
         working-directory: npm/editor
-        run: npm publish --access public
+        run: |
+          package_name=$(node -p "require('./package.json').name")
+          package_version=$(node -p "require('./package.json').version")
+          if npm view "${package_name}@${package_version}" version >/dev/null 2>&1; then
+            echo "${package_name}@${package_version} already exists; skipping publish"
+          else
+            npm publish --access public
+          fi
 
   publish-vscode:
     name: Publish VSCode Extension
     needs: build-wasm
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.publish_extensions }}
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
 
     steps:
       - uses: actions/checkout@v5

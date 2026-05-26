@@ -45,6 +45,8 @@ GitHub Release 생성 (태그)
 ```
 
 > **중요**: GitHub Release를 생성하면 5곳 모두 자동 배포된다. 수동 `npm publish`나 `publish.sh`를 실행하지 않는다.
+> 단, release workflow를 재실행하면서 이미 VS Code/Open VSX 배포가 끝난 경우에는
+> `workflow_dispatch`의 `publish_extensions=false` 입력으로 npm publish만 다시 시도한다.
 
 ### GitHub Secrets 설정
 
@@ -58,6 +60,10 @@ GitHub Actions에서 사용하는 시크릿 (Settings → Secrets and variables 
 > npm 배포는 GitHub Actions OIDC 기반 Trusted Publishing을 사용한다.
 > `@rhwp/core`, `@rhwp/editor` 각각의 npm package settings에서
 > trusted publisher를 `edwardkim/rhwp`, workflow `npm-publish.yml`, allowed action `npm publish`로 등록해야 한다.
+> npm package settings의 Environment name을 지정했다면 GitHub Actions publish job의 `environment:`와
+> 정확히 같아야 한다. 현재 배포 환경명은 `NPM_TOKEN`이다.
+> npm publish job에는 장기 토큰(`NPM_TOKEN`, `NODE_AUTH_TOKEN`)을 주입하지 않는다.
+> `npm publish`는 GitHub Actions OIDC로 인증하며 provenance는 npm이 자동 생성한다.
 
 ---
 
@@ -412,8 +418,10 @@ Permission denied: pkg/package.json
   - package: `@rhwp/core`, `@rhwp/editor` 각각 등록 필요
   - repository: `edwardkim/rhwp`
   - workflow filename: `npm-publish.yml`
+  - environment name: `NPM_TOKEN` (npm 설정에서 비워두면 workflow에서도 제거)
   - allowed action: `npm publish`
 - workflow `permissions.id-token: write` 설정 확인
+- npm publish step에 `NPM_TOKEN` 또는 `NODE_AUTH_TOKEN` 환경변수가 주입되지 않는지 확인
 - `package.json`의 repository URL이 GitHub repository와 일치하는지 확인
 - Actions 탭에서 `npm-publish.yml` 실행 로그 확인
 
