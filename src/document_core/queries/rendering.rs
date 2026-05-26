@@ -714,7 +714,7 @@ impl DocumentCore {
         let pbf_right = hwpunit_to_px(page_border_fill.spacing_right as i32, self.dpi);
         let pbf_top = hwpunit_to_px(page_border_fill.spacing_top as i32, self.dpi);
         let pbf_bottom = hwpunit_to_px(page_border_fill.spacing_bottom as i32, self.dpi);
-        let (page_border_left, page_border_right, page_border_top, page_border_bottom) =
+        let (page_border_left, page_border_right, page_border_top, mut page_border_bottom) =
             match page_border_fill.basis {
                 PageBorderBasis::PaperBased => (pbf_left, pbf_right, pbf_top, pbf_bottom),
                 PageBorderBasis::BodyBased => (
@@ -724,6 +724,14 @@ impl DocumentCore {
                     mb + mf + pbf_bottom,
                 ),
             };
+        if page_border_fill.border_fill_id > 0 && (page_border_fill.attr & 0x04) == 0 {
+            let rendered_bottom_y =
+                page_content.layout.body_area.y + page_content.layout.body_area.height;
+            let rendered_bottom_margin = page_content.layout.page_height - rendered_bottom_y;
+            if rendered_bottom_margin > page_border_bottom {
+                page_border_bottom = rendered_bottom_margin;
+            }
+        }
         // 단별 영역 정보
         let cols_json: String = page_content
             .layout
