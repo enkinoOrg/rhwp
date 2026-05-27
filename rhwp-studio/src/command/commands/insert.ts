@@ -181,7 +181,23 @@ export const insertCommands: CommandDef[] = [
         picturePropsDialog = new PicturePropsDialog(services.wasm, services.eventBus);
       }
       // [Task #825] 머리말/꼬리말 그림은 ref.headerFooter 동반 — dialog 에 전달.
-      picturePropsDialog.open(ref.sec, ref.ppi, ref.ci, ref.type, ref.headerFooter);
+      // [Task #1138] 표 셀 내 객체 (ref.cellIdx + outerTableControlIdx 동반) 는
+      // cellPath 구성하여 dialog 에 전달 → by_path API 사용.
+      const cellPath = (
+        ref.cellIdx !== undefined &&
+        ref.cellParaIdx !== undefined &&
+        (ref as any).outerTableControlIdx !== undefined
+      )
+        ? [{
+            controlIdx: (ref as any).outerTableControlIdx as number,
+            cellIdx: ref.cellIdx,
+            cellParaIdx: ref.cellParaIdx,
+          }]
+        : undefined;
+      picturePropsDialog.open(
+        ref.sec, ref.ppi, ref.ci, ref.type, ref.headerFooter,
+        cellPath, cellPath ? ref.ci : undefined,
+      );
     },
   },
   {
