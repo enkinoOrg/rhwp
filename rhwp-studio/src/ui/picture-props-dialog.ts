@@ -507,7 +507,7 @@ export class PicturePropsDialog {
     vPosRow.classList.add('pp-pos-detail');
     vPosRow.appendChild(this.label('세로(V):'));
     this.vertRelSelect = this.selectEl([
-      ['Paper', '종이'], ['Page', '쪽'], ['Paragraph', '문단'],
+      ['Paper', '종이'], ['Page', '쪽'], ['Para', '문단'],
     ]);
     vPosRow.appendChild(this.vertRelSelect);
     vPosRow.appendChild(this.unit('의'));

@@ -81,6 +81,8 @@ pub struct SvgRenderer {
     overlay_para_bounds: std::collections::HashMap<usize, OverlayBounds>,
     /// 디버그 오버레이용: 표 경계 수집
     overlay_table_bounds: Vec<OverlayTableInfo>,
+    /// 디버그 오버레이용: 이미지 경계 수집
+    overlay_image_bounds: Vec<OverlayImageInfo>,
     /// 디버그 오버레이용: vpos=0 리셋 위치 수집 (문단 첫 줄 제외)
     overlay_vpos_resets: Vec<OverlayVposReset>,
     /// 디버그 오버레이용: 표/머리말/꼬리말 내부 깊이 (셀 내·헤더 문단 제외)
@@ -132,6 +134,17 @@ struct OverlayTableInfo {
     col_count: u16,
 }
 
+/// 디버그 오버레이용 이미지 정보
+struct OverlayImageInfo {
+    section_index: usize,
+    para_index: usize,
+    control_index: usize,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
 impl SvgRenderer {
     pub fn new() -> Self {
         Self {
@@ -147,6 +160,7 @@ impl SvgRenderer {
             debug_overlay: false,
             overlay_para_bounds: std::collections::HashMap::new(),
             overlay_table_bounds: Vec::new(),
+            overlay_image_bounds: Vec::new(),
             overlay_vpos_resets: Vec::new(),
             overlay_skip_depth: 0,
             overlay_page_section: -1,
@@ -610,6 +624,27 @@ impl SvgRenderer {
                         }
                     }
                     self.overlay_skip_depth += 1;
+                }
+                RenderNodeType::Image(img) => {
+                    if let (Some(pi), Some(ci)) = (img.para_index, img.control_index) {
+                        if self.overlay_skip_depth == 0 {
+                            let img_si = img.section_index.unwrap_or(0);
+                            if self.overlay_page_section == -1 {
+                                self.overlay_page_section = img_si as i32;
+                            }
+                            if img_si as i32 == self.overlay_page_section {
+                                self.overlay_image_bounds.push(OverlayImageInfo {
+                                    section_index: img_si,
+                                    para_index: pi,
+                                    control_index: ci,
+                                    x: node.bbox.x,
+                                    y: node.bbox.y,
+                                    width: node.bbox.width,
+                                    height: node.bbox.height,
+                                });
+                            }
+                        }
+                    }
                 }
                 // 머리말/꼬리말/바탕쪽/각주/텍스트박스/그룹: body 외 영역 제외
                 RenderNodeType::Header
@@ -2114,6 +2149,56 @@ impl SvgRenderer {
             }
         }
     }
+
+    fn place_debug_label(
+        occupied: &mut Vec<(f64, f64, f64, f64)>,
+        x: f64,
+        preferred_y: f64,
+        width: f64,
+        height: f64,
+        page_height: f64,
+    ) -> f64 {
+        fn overlaps(a: (f64, f64, f64, f64), b: (f64, f64, f64, f64)) -> bool {
+            let pad = 1.0;
+            let (ax, ay, aw, ah) = a;
+            let (bx, by, bw, bh) = b;
+            ax < bx + bw + pad && ax + aw + pad > bx && ay < by + bh + pad && ay + ah + pad > by
+        }
+
+        let min_y = 0.0;
+        let max_y = (page_height - height).max(0.0);
+        let preferred_y = preferred_y.clamp(min_y, max_y);
+        let step = height + 2.0;
+
+        for i in 0..64 {
+            let distance = step * i as f64;
+            for offset in if i == 0 {
+                [0.0, f64::NAN]
+            } else {
+                [-distance, distance]
+            } {
+                if offset.is_nan() {
+                    continue;
+                }
+                let candidate_y = preferred_y + offset;
+                if candidate_y < min_y || candidate_y > max_y {
+                    continue;
+                }
+                let candidate = (x, candidate_y, width, height);
+                if !occupied
+                    .iter()
+                    .any(|&(ox, oy, ow, oh)| overlaps(candidate, (ox, oy, ow, oh)))
+                {
+                    occupied.push(candidate);
+                    return candidate_y;
+                }
+            }
+        }
+
+        occupied.push((x, preferred_y, width, height));
+        preferred_y
+    }
+
     /// 디버그 오버레이: 문단/표 경계와 인덱스 라벨을 렌더링
     fn render_debug_overlay(&mut self) {
         self.output
@@ -2123,6 +2208,7 @@ impl SvgRenderer {
         let colors = [
             "#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4", "#FFEAA7", "#DDA0DD", "#98D8C8", "#F7DC6F",
         ];
+        let mut occupied_labels = Vec::new();
 
         // 문단 경계 렌더링
         let mut sorted_paras: Vec<_> = self.overlay_para_bounds.iter().collect();
@@ -2140,16 +2226,24 @@ impl SvgRenderer {
             ));
             // 라벨 (좌측 상단)
             let label_w = label.len() as f64 * 5.0 + 4.0;
+            let label_h = 10.0;
+            let label_y = Self::place_debug_label(
+                &mut occupied_labels,
+                bounds.x,
+                bounds.y - label_h,
+                label_w,
+                label_h,
+                self.height,
+            );
             self.output.push_str(&format!(
                 "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"10\" fill=\"{}\" rx=\"2\"/>\n",
-                bounds.x,
-                bounds.y - 10.0,
-                label_w,
-                color,
+                bounds.x, label_y, label_w, color,
             ));
             self.output.push_str(&format!(
                 "<text x=\"{}\" y=\"{}\" font-family=\"monospace\" font-size=\"8\" fill=\"#fff\" font-weight=\"bold\">{}</text>\n",
-                bounds.x + 2.0, bounds.y - 2.0, label,
+                bounds.x + 2.0,
+                label_y + label_h - 2.0,
+                label,
             ));
         }
 
@@ -2173,18 +2267,61 @@ impl SvgRenderer {
             );
             let label_w = label.len() as f64 * 5.0 + 4.0;
             let label_x = (tbl.x + tbl.width - label_w).max(tbl.x);
+            let label_h = 11.0;
+            let label_y = Self::place_debug_label(
+                &mut occupied_labels,
+                label_x,
+                tbl.y - label_h,
+                label_w,
+                label_h,
+                self.height,
+            );
             self.output.push_str(&format!(
                 "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"11\" fill=\"#E74C3C\" rx=\"2\"/>\n",
-                label_x,
-                tbl.y - 11.0,
-                label_w,
+                label_x, label_y, label_w,
             ));
             self.output.push_str(&format!(
                 "<text x=\"{}\" y=\"{}\" font-family=\"monospace\" font-size=\"8\" fill=\"#fff\" font-weight=\"bold\">{}</text>\n",
-                label_x + 2.0, tbl.y - 2.0, label,
+                label_x + 2.0,
+                label_y + label_h - 2.0,
+                label,
             ));
         }
         self.overlay_table_bounds = table_bounds;
+
+        // 이미지 경계 렌더링
+        let image_bounds = std::mem::take(&mut self.overlay_image_bounds);
+        for img in &image_bounds {
+            self.output.push_str(&format!(
+                "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"none\" stroke=\"#7B61FF\" stroke-width=\"1.2\" stroke-dasharray=\"4,2\"/>\n",
+                img.x, img.y, img.width, img.height,
+            ));
+            let label = format!(
+                "s{}:pi={} ci={} image y={:.1}",
+                img.section_index, img.para_index, img.control_index, img.y
+            );
+            let label_w = label.len() as f64 * 5.0 + 4.0;
+            let label_h = 11.0;
+            let label_y = Self::place_debug_label(
+                &mut occupied_labels,
+                img.x,
+                img.y - label_h,
+                label_w,
+                label_h,
+                self.height,
+            );
+            self.output.push_str(&format!(
+                "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"11\" fill=\"#7B61FF\" rx=\"2\"/>\n",
+                img.x, label_y, label_w,
+            ));
+            self.output.push_str(&format!(
+                "<text x=\"{}\" y=\"{}\" font-family=\"monospace\" font-size=\"8\" fill=\"#fff\" font-weight=\"bold\">{}</text>\n",
+                img.x + 2.0,
+                label_y + label_h - 2.0,
+                label,
+            ));
+        }
+        self.overlay_image_bounds = image_bounds;
 
         // vpos=0 리셋 위치 마커 (앰버 가로 점선 + 라벨)
         let vpos_resets = std::mem::take(&mut self.overlay_vpos_resets);
@@ -2200,15 +2337,24 @@ impl SvgRenderer {
                 rs.section_index, rs.para_index, rs.line_index
             );
             let label_w = label.len() as f64 * 5.0 + 4.0;
+            let label_h = 11.0;
+            let label_y = Self::place_debug_label(
+                &mut occupied_labels,
+                rs.x,
+                rs.y - label_h,
+                label_w,
+                label_h,
+                self.height,
+            );
             self.output.push_str(&format!(
                 "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"11\" fill=\"#FFB300\" rx=\"2\"/>\n",
-                rs.x,
-                rs.y - 11.0,
-                label_w,
+                rs.x, label_y, label_w,
             ));
             self.output.push_str(&format!(
                 "<text x=\"{}\" y=\"{}\" font-family=\"monospace\" font-size=\"8\" fill=\"#000\" font-weight=\"bold\">{}</text>\n",
-                rs.x + 2.0, rs.y - 2.0, label,
+                rs.x + 2.0,
+                label_y + label_h - 2.0,
+                label,
             ));
         }
         self.overlay_vpos_resets = vpos_resets;
@@ -2227,6 +2373,7 @@ impl Renderer for SvgRenderer {
         self.gradient_counter = 0;
         self.overlay_para_bounds.clear();
         self.overlay_table_bounds.clear();
+        self.overlay_image_bounds.clear();
         self.overlay_vpos_resets.clear();
         self.overlay_skip_depth = 0;
         self.overlay_page_section = -1;

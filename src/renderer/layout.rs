@@ -4867,6 +4867,16 @@ impl LayoutEngine {
                                 control_index,
                                 vpos_accounts_for_height,
                             );
+                            // layout_body_picture needs the host paragraph y for Para-relative
+                            // positioning, but InFront/Behind pictures must not rewind the
+                            // already-advanced text flow cursor back to that paragraph y.
+                            if matches!(
+                                pic.common.text_wrap,
+                                crate::model::shape::TextWrap::InFrontOfText
+                                    | crate::model::shape::TextWrap::BehindText
+                            ) {
+                                result_y = saved_y_offset;
+                            }
                             // [Task #959] horz_rel_to=Column 의 picture 가 col_area 우측을
                             // 초과하는 위치에 emit 되면 한컴 viewer 는 column flow 에
                             // reservation 하지 않음. rhwp 는 cursor 를 picture height 만큼
