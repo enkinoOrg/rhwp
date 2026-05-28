@@ -264,8 +264,13 @@ export function finishImagePlacement(this: any, e: MouseEvent): void {
   if (!hit) { this.cancelImagePlacement(); return; }
 
   const sec = hit.sectionIndex;
-  const paraIdx = hit.paragraphIndex;
+  // 표 셀 안 클릭 (#1151): floating picture 분기를 위해 cellPath 와
+  // parentParaIndex (= 표가 들어있는 outer paragraph) 사용. 본문 클릭은
+  // 기존 paragraphIndex 그대로.
+  const inCell = (hit.cellPath?.length ?? 0) > 0 && hit.parentParaIndex !== undefined;
+  const paraIdx = inCell ? hit.parentParaIndex! : hit.paragraphIndex;
   const charOffset = hit.charOffset;
+  const cellPathJson = inCell ? JSON.stringify(hit.cellPath) : '';
 
   // 크기 결정
   const zoom = this.viewportManager.getZoom();
@@ -302,7 +307,7 @@ export function finishImagePlacement(this: any, e: MouseEvent): void {
 
   // WASM 호출
   try {
-    const result = this.wasm.insertPicture(sec, paraIdx, charOffset, imgData.data, wHwp, hHwp, imgData.naturalWidth, imgData.naturalHeight, imgData.ext, desc);
+    const result = this.wasm.insertPicture(sec, paraIdx, charOffset, cellPathJson, imgData.data, wHwp, hHwp, imgData.naturalWidth, imgData.naturalHeight, imgData.ext, desc);
     if (result.ok) {
       this.eventBus.emit('document-changed');
     }

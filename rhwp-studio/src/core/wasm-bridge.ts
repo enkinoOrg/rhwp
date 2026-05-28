@@ -821,12 +821,23 @@ export class WasmBridge {
     return this.doc.evaluateTableFormula(sec, parentPara, controlIdx, targetRow, targetCol, formula, writeResult);
   }
 
+  /**
+   * 커서 위치에 그림을 삽입한다.
+   *
+   * @param cellPathJson 표 셀 안 삽입 시 cellPath JSON (#1151).
+   *   빈 문자열 또는 `'[]'` 면 본문 inline 삽입 (기존 동작, treat_as_char=true).
+   *   비어있지 않으면 셀 영역에 floating picture 삽입 (한컴 정합, tac=false,
+   *   wrap=Square, Page-relative offset). 셀 자체는 비어있는 채로 유지되어
+   *   클릭 시 cursor 가 정상 동작한다.
+   *   예: `JSON.stringify([{controlIndex:0, cellIndex:2, cellParaIndex:0}])`
+   */
   insertPicture(sec: number, paraIdx: number, charOffset: number,
+                cellPathJson: string,
                 imageData: Uint8Array, width: number, height: number,
                 naturalWidthPx: number, naturalHeightPx: number,
                 extension: string, description: string = ''): { ok: boolean; paraIdx: number; controlIdx: number } {
     if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
-    return JSON.parse(this.doc.insertPicture(sec, paraIdx, charOffset, imageData, width, height, naturalWidthPx, naturalHeightPx, extension, description));
+    return JSON.parse(this.doc.insertPicture(sec, paraIdx, charOffset, cellPathJson, imageData, width, height, naturalWidthPx, naturalHeightPx, extension, description));
   }
 
   // ── 그림 속성 API ─────────────────────────────────────
