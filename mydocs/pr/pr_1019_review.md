@@ -155,7 +155,7 @@ rhwp-studio WASM bundle
 rhwp-studio는 차트 컨트롤 조판이 아직 구현되지 않아 이 동작을 재현하지 못한다.
 
 이 문제는 #1019의 PageBackground fill_mode/RealPic watermark tone 범위와 독립적인
-차트 컨트롤/다단 레이아웃 후속 이슈로 분리한다.
+차트 컨트롤/다단 레이아웃 후속 이슈 #1156으로 분리한다.
 ```
 
 ## 7. 권장 처리
