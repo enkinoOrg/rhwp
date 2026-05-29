@@ -290,6 +290,11 @@ impl DocumentCore {
         section.raw_stream = None;
         self.recompose_section(section_idx);
         self.paginate_if_needed();
+        // [Task #1151 v5] page tree cache invalidate — 다른 picture/shape setter (셀 shape
+        // by_path / 셀 picture by_path / header-footer picture / shape 등) 모두 호출하나
+        // 본 본문 picture setter 만 누락되어 있어 studio 가 stale page tree 반환 → tac toggle
+        // 후 시각 변화 없음 증상의 root cause.
+        self.invalidate_page_tree_cache();
         self.event_log.push(DocumentEvent::PictureResized {
             section: section_idx,
             para: parent_para_idx,
@@ -6350,6 +6355,117 @@ mod issue_1151_v2_tac_toggle_tests {
         assert_eq!(
             para.line_segs[0].baseline_distance,
             expected_baseline(pic_h as i32)
+        );
+    }
+
+    // ─── [Task #1151 v5] v1 path → tac toggle → page tree cache invalidate 검증 ─
+    //
+    // 사용자 보고 (2026-05-30): "rhwp 신규 표 + 셀 안 이미지 → tac 토글 시
+    // 시각 변화 없음". 진단 결과 model + composer + paragraph_layout 모두 정상
+    // 동작 (picture 가 표 아래 정확 위치 156.9 px 에 inline 렌더) 인데, studio
+    // 가 stale page tree 받음. root cause: set_picture_properties_native 의
+    // invalidate_page_tree_cache 호출 누락 — 다른 picture/shape setter (셀 picture
+    // by_path / 셀 shape by_path / header-footer / shape 등) 는 모두 호출.
+    //
+    // 본 테스트는 v1 path → tac toggle 후 build_page_render_tree 가 picture 가
+    // 표 아래로 이동한 새 위치로 ImageNode 를 emit 하는지 검증 — cache 갱신 정합.
+    #[test]
+    fn v5_tac_toggle_invalidates_page_tree_and_emits_inline_picture_below_table() {
+        use crate::renderer::render_tree::{RenderNode, RenderNodeType};
+        fn collect_image_bboxes(node: &RenderNode, out: &mut Vec<(f64, f64, f64, f64)>) {
+            if matches!(node.node_type, RenderNodeType::Image(_)) {
+                out.push((node.bbox.x, node.bbox.y, node.bbox.width, node.bbox.height));
+            }
+            for child in &node.children {
+                collect_image_bboxes(child, out);
+            }
+        }
+        fn collect_table_bboxes(node: &RenderNode, out: &mut Vec<(f64, f64, f64, f64)>) {
+            if matches!(node.node_type, RenderNodeType::Table(_)) {
+                out.push((node.bbox.x, node.bbox.y, node.bbox.width, node.bbox.height));
+            }
+            for child in &node.children {
+                collect_table_bboxes(child, out);
+            }
+        }
+
+        let mut core = make_test_core();
+        let table_res = core
+            .create_table_native(0, 0, 0, 1, 1)
+            .expect("create 1x1 table");
+        let table_para_idx = parse_idx(&table_res, "paraIdx");
+        let table_ctrl_idx = parse_idx(&table_res, "controlIdx");
+        let cell_path: Vec<(usize, usize, usize)> = vec![(table_ctrl_idx, 0, 0)];
+        let image = minimal_png();
+        let pic_w = 5977u32;
+        let pic_h = 5331u32;
+        core.insert_picture_native(
+            0,
+            table_para_idx,
+            0,
+            &cell_path,
+            &image,
+            pic_w,
+            pic_h,
+            1,
+            1,
+            "png",
+            "test",
+        )
+        .expect("insert floating picture in cell");
+        let pic_ctrl_idx = core.document.sections[0].paragraphs[table_para_idx]
+            .controls
+            .len()
+            - 1;
+
+        // toggle 전: build_page_tree_cached 호출 → cache 채움.
+        let tree_before = core
+            .build_page_tree_cached(0)
+            .expect("build_page_tree_cached pre-toggle");
+        let mut image_before: Vec<(f64, f64, f64, f64)> = vec![];
+        collect_image_bboxes(&tree_before.root, &mut image_before);
+        assert_eq!(image_before.len(), 1, "toggle 전 ImageNode 1 개 필요");
+        let (_x0, y_before, _w0, _h0) = image_before[0];
+
+        // tac false → true 토글
+        core.set_picture_properties_native(
+            0,
+            table_para_idx,
+            pic_ctrl_idx,
+            r#"{"treatAsChar":true}"#,
+        )
+        .expect("toggle");
+
+        // toggle 후: build_page_tree_cached 다시 호출. fix 적용 시 invalidate_page_tree_cache
+        // 가 작동하여 새 tree 반환 (picture 위치 = 표 아래). fix 미적용 시 stale cache 반환.
+        let tree_after = core
+            .build_page_tree_cached(0)
+            .expect("build_page_tree_cached post-toggle");
+        let mut image_after: Vec<(f64, f64, f64, f64)> = vec![];
+        collect_image_bboxes(&tree_after.root, &mut image_after);
+        let mut table_after: Vec<(f64, f64, f64, f64)> = vec![];
+        collect_table_bboxes(&tree_after.root, &mut table_after);
+
+        assert_eq!(image_after.len(), 1, "toggle 후 ImageNode 1 개 필요");
+        assert_eq!(table_after.len(), 1, "toggle 후 Table 1 개 필요");
+        let (_x_a, y_after, _w_a, _h_a) = image_after[0];
+        let (_tx, ty, _tw, th) = table_after[0];
+        let table_bottom = ty + th;
+
+        // (A) cache invalidate 검증: toggle 전후 picture y 가 다름 (stale cache 아님).
+        assert!(
+            (y_before - y_after).abs() > 0.5,
+            "FAIL: page tree cache invalidate 누락 — toggle 후에도 picture y 동일 (before={}, after={})",
+            y_before,
+            y_after
+        );
+
+        // (B) toggle 후 picture 가 표 아래 위치 (한컴 정합).
+        assert!(
+            y_after > table_bottom,
+            "FAIL: picture 가 표 아래에 미배치 — picture y={}, table bottom={}",
+            y_after,
+            table_bottom
         );
     }
 
