@@ -8,8 +8,9 @@ use crate::error::HwpError;
 use crate::model::image::ImageEffect;
 use crate::model::ColorRef;
 use crate::paint::{
-    GlyphRunOrientation, GlyphRunReplayEligibility, LayerGlyphRunPaint, LayerNode, LayerNodeKind,
-    LayerOutputOptions, PageLayerTree, PaintOp, ResourceArena, TextVariantQuality,
+    paint_op_replay_plane, GlyphRunOrientation, GlyphRunReplayEligibility, LayerGlyphRunPaint,
+    LayerNode, LayerNodeKind, LayerOutputOptions, PageLayerTree, PaintOp, PaintReplayPlane,
+    ResourceArena, TextVariantQuality,
 };
 use crate::renderer::layer_renderer::{
     LayerRasterRenderer, LayerRenderResult, RasterOutputFormat, RasterRenderOptions,
@@ -228,13 +229,16 @@ impl SkiaLayerRenderer {
             canvas.scale((options.scale as f32, options.scale as f32));
         }
         let mut next_text_source_id = 0_u32;
-        self.render_node(
-            canvas,
-            &tree.root,
-            &tree.output_options,
-            &tree.resources,
-            &mut next_text_source_id,
-        );
+        for replay_plane in PaintReplayPlane::ORDERED {
+            self.render_node(
+                canvas,
+                &tree.root,
+                &tree.output_options,
+                &tree.resources,
+                replay_plane,
+                &mut next_text_source_id,
+            );
+        }
 
         let image = surface.image_snapshot();
         let data = image
@@ -256,6 +260,7 @@ impl SkiaLayerRenderer {
         node: &LayerNode,
         output_options: &LayerOutputOptions,
         resources: &ResourceArena,
+        replay_plane: PaintReplayPlane,
         next_text_source_id: &mut u32,
     ) {
         let clip_enabled = output_options.clip_enabled;
@@ -402,6 +407,7 @@ impl SkiaLayerRenderer {
                         child,
                         output_options,
                         resources,
+                        replay_plane,
                         next_text_source_id,
                     );
                 }
@@ -413,6 +419,7 @@ impl SkiaLayerRenderer {
                         child,
                         output_options,
                         resources,
+                        replay_plane,
                         next_text_source_id,
                     );
                     return;
@@ -433,6 +440,7 @@ impl SkiaLayerRenderer {
                     child,
                     output_options,
                     resources,
+                    replay_plane,
                     next_text_source_id,
                 );
                 canvas.restore();
@@ -443,6 +451,9 @@ impl SkiaLayerRenderer {
                     HashMap::<String, HashMap<String, (usize, u32, HashSet<u32>, bool)>>::new();
                 let mut glyph_variant_sources = HashMap::<String, u32>::new();
                 for op in ops {
+                    if paint_op_replay_plane(op) != replay_plane {
+                        continue;
+                    }
                     if let PaintOp::GlyphRun { run, .. } = op {
                         glyph_variant_sources
                             .entry(run.variant.equivalence_group.clone())
@@ -485,6 +496,9 @@ impl SkiaLayerRenderer {
                     .filter_map(|group| glyph_variant_sources.get(group).copied())
                     .collect::<HashSet<_>>();
                 for op in ops {
+                    if paint_op_replay_plane(op) != replay_plane {
+                        continue;
+                    }
                     let skip_unselected_text_variant = match op {
                         PaintOp::TextRun { .. } => {
                             let source_id = *next_text_source_id;
@@ -524,14 +538,37 @@ impl SkiaLayerRenderer {
                                 canvas.draw_rect(rect, &paint);
                             }
                             if let Some(image) = &background.image {
+                                // [Issue #1156] 워터마크(밝기·대비가 둘 다 0 이 아님)
+                                // 인 배경 이미지만 반투명 합성한다. 밝기·대비가 0/0 인
+                                // 일반 배경 이미지는 불투명 그대로 (effect 그레이스케일
+                                // 등은 draw_image 가 컬러 필터로 처리).
+                                // svg.rs/web_canvas.rs render_page_background_image 정합.
+                                let is_watermark = image.is_watermark();
+                                if is_watermark {
+                                    use crate::renderer::render_tree::{
+                                        LEGACY_IMAGE_WATERMARK_OPACITY,
+                                        REAL_PICTURE_WATERMARK_PAGE_OPACITY,
+                                    };
+                                    let wm_opacity =
+                                        if image.is_real_picture_watermark_tone_preset() {
+                                            REAL_PICTURE_WATERMARK_PAGE_OPACITY
+                                        } else {
+                                            LEGACY_IMAGE_WATERMARK_OPACITY
+                                        };
+                                    let alpha = (255.0 * wm_opacity).round() as u32;
+                                    canvas.save_layer_alpha(Some(rect), alpha);
+                                }
                                 draw_image(
                                     &image.data,
                                     *bbox,
                                     Some(image.fill_mode),
                                     None,
                                     None,
-                                    ImageEffect::RealPic,
+                                    image.effect,
                                 );
+                                if is_watermark {
+                                    canvas.restore();
+                                }
                             }
                             if let Some(color) = background.border_color {
                                 let mut paint = Paint::default();
@@ -1149,6 +1186,7 @@ pub(super) fn colorref_to_skia(color: ColorRef, alpha_scale: f32) -> Color {
 mod tests {
     use super::*;
     use crate::model::control::FormType;
+    use crate::model::shape::TextWrap;
     use crate::model::style::{ImageFillMode, UnderlineType};
     use crate::paint::{
         BinaryResourceKind, BinaryResourceRef, CacheHint, FontBlobKey, FontBlobResource,
@@ -1378,6 +1416,30 @@ mod tests {
                 }],
             ),
         )
+    }
+
+    fn solid_rect_op(bbox: BoundingBox, fill_color: ColorRef) -> PaintOp {
+        PaintOp::Rectangle {
+            bbox,
+            rect: RectangleNode::new(
+                0.0,
+                ShapeStyle {
+                    fill_color: Some(fill_color),
+                    ..Default::default()
+                },
+                None,
+            ),
+        }
+    }
+
+    fn solid_image_op(bbox: BoundingBox, color: [u8; 4], wrap: TextWrap) -> PaintOp {
+        let mut image = ImageNode::new(1, Some(solid_png(color)));
+        image.text_wrap = Some(wrap);
+        PaintOp::Image {
+            bbox,
+            image,
+            resolved: None,
+        }
     }
 
     #[test]
@@ -1687,6 +1749,10 @@ mod tests {
         assert_channel(pixel, 0, 0, 32);
         assert_channel(pixel, 1, 0, 32);
         assert_channel(pixel, 2, 220, 255);
+        // [Issue #1156 _v2] 밝기·대비 0/0 배경 이미지는 워터마크가 아니므로
+        // 불투명으로 합성한다(is_watermark() = brightness!=0 && contrast!=0).
+        // PR #1163 은 _v2 이전의 "RealPic 배경=항상 워터마크 opacity" 가정으로
+        // 반투명을 기대했으나, 권위 자료로 확정된 _v2 기준에 맞춰 불투명으로 정정.
         assert_eq!(pixel[3], 255);
     }
 
@@ -1864,6 +1930,67 @@ mod tests {
 
         assert_channel(valid, 2, 220, 255);
         assert!(invalid_placeholder[3] > 0);
+    }
+
+    #[test]
+    fn behind_text_image_replays_below_flow_across_tree_branches() {
+        let bbox = BoundingBox::new(0.0, 0.0, 12.0, 12.0);
+        let flow = LayerNode::leaf(bbox, None, vec![solid_rect_op(bbox, 0x000000ff)]);
+        let behind = LayerNode::leaf(
+            bbox,
+            None,
+            vec![solid_image_op(bbox, [0, 0, 255, 255], TextWrap::BehindText)],
+        );
+        let tree = PageLayerTree::new(
+            12.0,
+            12.0,
+            LayerNode::group(
+                bbox,
+                None,
+                vec![flow, behind],
+                CacheHint::None,
+                GroupKind::Generic,
+            ),
+        );
+
+        let output = SkiaLayerRenderer::new()
+            .render_raster_with_options(&tree, RasterRenderOptions::default())
+            .expect("render behind text order");
+        let image = decode_rgba(&output.bytes);
+        let center = *image.get_pixel(6, 6);
+
+        assert_channel(center, 0, 180, 255);
+        assert_channel(center, 1, 0, 64);
+        assert_channel(center, 2, 0, 64);
+        assert_eq!(center[3], 255);
+    }
+
+    #[test]
+    fn in_front_of_text_image_replays_above_flow_when_raw_order_is_earlier() {
+        let bbox = BoundingBox::new(0.0, 0.0, 12.0, 12.0);
+        let tree = PageLayerTree::new(
+            12.0,
+            12.0,
+            LayerNode::leaf(
+                bbox,
+                None,
+                vec![
+                    solid_image_op(bbox, [0, 0, 255, 255], TextWrap::InFrontOfText),
+                    solid_rect_op(bbox, 0x000000ff),
+                ],
+            ),
+        );
+
+        let output = SkiaLayerRenderer::new()
+            .render_raster_with_options(&tree, RasterRenderOptions::default())
+            .expect("render in-front text order");
+        let image = decode_rgba(&output.bytes);
+        let center = *image.get_pixel(6, 6);
+
+        assert_channel(center, 0, 0, 64);
+        assert_channel(center, 1, 0, 64);
+        assert_channel(center, 2, 180, 255);
+        assert_eq!(center[3], 255);
     }
 
     #[test]

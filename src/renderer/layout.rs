@@ -4802,6 +4802,10 @@ impl LayoutEngine {
                                     brightness: pic.image_attr.brightness,
                                     contrast: pic.image_attr.contrast,
                                     transform: utils::extract_shape_transform(&pic.shape_attr),
+                                    // [Issue #1167] wrap 모드 보존 — SVG plane multi-pass z-order
+                                    // 판별에 사용 (BehindText 워터마크가 본문 뒤로). PaintOp
+                                    // 경로(skia/canvaskit)는 별도로 image.text_wrap 을 set 하므로 무관.
+                                    text_wrap: Some(pic.common.text_wrap),
                                     ..ImageNode::new(bin_data_id, image_data)
                                 }),
                                 BoundingBox::new(pic_x, pic_y, pic_w, pic_h),
@@ -5249,6 +5253,24 @@ impl LayoutEngine {
                                     .unwrap_or(shape_h);
                                 result_y = shape_y + line_advance.max(shape_h);
                             }
+                        }
+                    } else if !common.treat_as_char
+                        && matches!(
+                            common.text_wrap,
+                            crate::model::shape::TextWrap::TopAndBottom
+                        )
+                        && matches!(common.vert_rel_to, crate::model::shape::VertRelTo::Para)
+                    {
+                        // [Issue #1156] 비-TAC 자리차지(TopAndBottom) 객체(차트 OLE 등):
+                        // 자리차지 객체는 본문 텍스트를 위/아래로 밀어내므로, 후속 콘텐츠
+                        // 시작 y(result_y)를 객체 높이 + 아래 여백만큼 진행시켜 텍스트가
+                        // 객체 영역과 겹치지 않게 한다. (typeset.rs Stage 2 의 current_height
+                        // 가산과 layout 정합 — 단 이동 후 단 시작 y_offset 기준.)
+                        let shape_h = hwpunit_to_px(common.height as i32, self.dpi);
+                        let margin_bottom = hwpunit_to_px(common.margin.bottom as i32, self.dpi);
+                        let advance = shape_h + margin_bottom;
+                        if y_offset + advance > result_y {
+                            result_y = y_offset + advance;
                         }
                     }
                 }

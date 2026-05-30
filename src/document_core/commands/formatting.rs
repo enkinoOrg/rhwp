@@ -702,9 +702,14 @@ impl DocumentCore {
         } else {
             raw_left_hu + raw_indent_hu.min(0)
         };
-        let dialog_margin_left_px = crate::renderer::hwpunit_to_px(effective_left_hu, self.dpi);
-        let dialog_margin_right_px = crate::renderer::hwpunit_to_px(raw_right_hu, self.dpi);
-        let dialog_indent_px = crate::renderer::hwpunit_to_px(raw_indent_hu, self.dpi);
+        // [Issue #1172] ParaShape margin/indent 의 IR 값은 2× 스케일이다
+        // (HWP5 바이너리 원본 스케일, HWPX 도 parser 의 val2x 로 통일 — header.rs).
+        // 즉 1pt = 200 HWPUNIT. 한컴 편집기 정답: para-001 margin 2000 → 10.0pt.
+        // dialog 표시(px→pt by frontend pxToPt)와 정합하려면 표준 hwpunit_to_px(7200/inch,
+        // 1× 가정) 적용 전에 2× 스케일을 1× 로 환산(÷2)해야 한다. (종전: ÷2 누락 → 2배 표시)
+        let dialog_margin_left_px = crate::renderer::hwpunit_to_px(effective_left_hu / 2, self.dpi);
+        let dialog_margin_right_px = crate::renderer::hwpunit_to_px(raw_right_hu / 2, self.dpi);
+        let dialog_indent_px = crate::renderer::hwpunit_to_px(raw_indent_hu / 2, self.dpi);
 
         match ps {
             Some(ps) => {

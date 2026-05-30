@@ -189,6 +189,7 @@ export class WasmBridge {
 
   set fileName(name: string) {
     this._fileName = name;
+    this.doc?.setFileName(name);
   }
 
   get currentFileHandle(): FileSystemFileHandleLike | null {
