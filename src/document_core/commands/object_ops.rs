@@ -1704,21 +1704,34 @@ impl DocumentCore {
             )));
         }
 
-        // === 본문 inline picture 분기 (기존 동작 유지) ===
+        // === 본문 floating picture 분기 (Task #1151 v9 결함 E — 셀 분기와 동일 패턴) ===
+        //
+        // 한컴 native 동작 (사용자 시연 2026-05-30): 본문 picture 신규 삽입 시
+        // 글자처럼 취급 default = **미체크** (tac=false, floating). 셀 안 picture
+        // 와 동일. 이전 rhwp 본문 path 는 새 paragraph 생성 + inline glyph (tac=true)
+        // 로 만들어 한컴 default 와 불일치 — 재설계하여 셀 분기와 통합.
+        let (offset_x_hu, offset_y_hu) = match (paper_offset_x_hu, paper_offset_y_hu) {
+            (Some(x), Some(y)) => (x, y),
+            _ => (0, 0),
+        };
 
-        // --- 3. Picture 컨트롤 생성 ---
-        // CommonObjAttr: treat_as_char, vert_rel_to=Para, horz_rel_to=Column,
-        // width_criterion=absolute(4), height_criterion=absolute(2)
-        let common_attr: u32 = 0x01 | (2 << 3) | (2 << 8) | (4 << 15) | (2 << 18); // 0x0A0211
+        // CommonObjAttr (floating, 셀 분기와 동일):
+        //   bits 3-4=vert_rel_to(0=Paper), bits 8-10=horz_rel_to(0=Paper),
+        //   bits 15-17=width_criterion(4=Absolute), bits 18-20=height_criterion(2=Absolute),
+        //   bits 21-23=text_wrap(0=Square)
+        let common_attr: u32 = (4 << 15) | (2 << 18);
         let common = CommonObjAttr {
             ctrl_id: 0x67736F20, // "gso " — GenShape
             attr: common_attr,
-            treat_as_char: true,
-            vert_rel_to: VertRelTo::Para,
-            horz_rel_to: HorzRelTo::Column,
+            treat_as_char: false,
+            vert_rel_to: VertRelTo::Paper,
+            horz_rel_to: HorzRelTo::Paper,
+            text_wrap: crate::model::shape::TextWrap::Square,
+            horizontal_offset: offset_x_hu.max(0) as u32,
+            vertical_offset: offset_y_hu.max(0) as u32,
             width,
             height,
-            z_order: 0,
+            z_order: 1,
             description: description.to_string(),
             ..Default::default()
         };
@@ -1733,130 +1746,25 @@ impl DocumentCore {
             ..Default::default()
         };
 
-        // --- 4. 그림 포함 문단 생성 + 삽입 (createTable 패턴) ---
-        let current_para = &self.document.sections[section_idx].paragraphs[para_idx];
-        let default_char_shape_id: u32 = current_para
-            .char_shapes
-            .first()
-            .map(|cs| cs.char_shape_id)
-            .unwrap_or(0);
-        let default_para_shape_id: u16 = current_para.para_shape_id;
-
-        let pd = &self.document.sections[section_idx].section_def.page_def;
-        let content_width =
-            (pd.width as i32 - pd.margin_left as i32 - pd.margin_right as i32).max(7200) as u32;
-
-        let mut pic_raw_header_extra = vec![0u8; 10];
-        pic_raw_header_extra[0..2].copy_from_slice(&1u16.to_le_bytes()); // n_char_shapes=1
-        pic_raw_header_extra[4..6].copy_from_slice(&1u16.to_le_bytes()); // n_line_segs=1
-
-        let pic_para = Paragraph {
-            text: String::new(),
-            char_count: 9, // 확장 제어문자(8 code units) + 문단끝(1)
-            control_mask: 0x00000800,
-            char_offsets: vec![],
-            char_shapes: vec![CharShapeRef {
-                start_pos: 0,
-                char_shape_id: default_char_shape_id,
-            }],
-            line_segs: vec![LineSeg {
-                text_start: 0,
-                line_height: height as i32,
-                text_height: height as i32,
-                baseline_distance: (height as i32 * 850) / 1000,
-                line_spacing: 600,
-                segment_width: content_width as i32,
-                tag: 0x00060000,
-                ..Default::default()
-            }],
-            para_shape_id: default_para_shape_id,
-            style_id: 0,
-            controls: vec![Control::Picture(Box::new(pic))],
-            ctrl_data_records: vec![None],
-            has_para_text: true,
-            raw_header_extra: pic_raw_header_extra,
-            char_count_msb: false,
-            ..Default::default()
-        };
-
-        // 커서 위치에 삽입
+        // 현재 paragraph 의 sibling control 로 append (새 paragraph 생성 X).
         self.document.sections[section_idx].raw_stream = None;
+        let parent = &mut self.document.sections[section_idx].paragraphs[para_idx];
+        let new_ctrl_idx = parent.controls.len();
+        parent.controls.push(Control::Picture(Box::new(pic)));
+        parent.ctrl_data_records.push(None);
 
-        let para = &self.document.sections[section_idx].paragraphs[para_idx];
-        let is_empty_para = para.text.is_empty() && para.controls.is_empty();
-
-        let insert_para_idx;
-        if is_empty_para && char_offset == 0 {
-            self.document.sections[section_idx].paragraphs[para_idx] = pic_para;
-            insert_para_idx = para_idx;
-        } else if char_offset == 0 && para.controls.is_empty() {
-            self.document.sections[section_idx]
-                .paragraphs
-                .insert(para_idx, pic_para);
-            insert_para_idx = para_idx;
-        } else if char_offset > 0 && !para.text.is_empty() {
-            let new_para =
-                self.document.sections[section_idx].paragraphs[para_idx].split_at(char_offset);
-            self.document.sections[section_idx]
-                .paragraphs
-                .insert(para_idx + 1, new_para);
-            self.document.sections[section_idx]
-                .paragraphs
-                .insert(para_idx + 1, pic_para);
-            insert_para_idx = para_idx + 1;
-        } else {
-            self.document.sections[section_idx]
-                .paragraphs
-                .insert(para_idx + 1, pic_para);
-            insert_para_idx = para_idx + 1;
-        }
-
-        // 그림 아래에 빈 문단 추가
-        let mut empty_raw_header_extra = vec![0u8; 10];
-        empty_raw_header_extra[0..2].copy_from_slice(&1u16.to_le_bytes());
-        empty_raw_header_extra[4..6].copy_from_slice(&1u16.to_le_bytes());
-        let empty_para = Paragraph {
-            text: String::new(),
-            char_count: 1,
-            char_count_msb: false,
-            control_mask: 0,
-            para_shape_id: default_para_shape_id,
-            style_id: 0,
-            char_shapes: vec![CharShapeRef {
-                start_pos: 0,
-                char_shape_id: default_char_shape_id,
-            }],
-            line_segs: vec![LineSeg {
-                text_start: 0,
-                line_height: 1000,
-                text_height: 1000,
-                baseline_distance: 850,
-                line_spacing: 600,
-                segment_width: content_width as i32,
-                tag: 0x00060000,
-                ..Default::default()
-            }],
-            has_para_text: false,
-            raw_header_extra: empty_raw_header_extra,
-            ..Default::default()
-        };
-        self.document.sections[section_idx]
-            .paragraphs
-            .insert(insert_para_idx + 1, empty_para);
-
-        // --- 5. 리플로우 + 페이지네이션 ---
-        self.recompose_section(section_idx);
+        self.mark_section_dirty(section_idx);
         self.paginate_if_needed();
-        // [Task #1151 v9 결함 F] page tree cache invalidate (셀 분기와 동일 누락 — v5 패턴).
+        // [Task #1151 v9 결함 F] page tree cache invalidate (v5 패턴).
         self.invalidate_page_tree_cache();
 
         self.event_log.push(DocumentEvent::PictureInserted {
             section: section_idx,
-            para: insert_para_idx,
+            para: para_idx,
         });
         Ok(super::super::helpers::json_ok_with(&format!(
-            "\"paraIdx\":{},\"controlIdx\":0",
-            insert_para_idx
+            "\"paraIdx\":{},\"controlIdx\":{}",
+            para_idx, new_ctrl_idx
         )))
     }
 
@@ -5972,14 +5880,16 @@ mod issue_1151_cell_picture_insert_tests {
     }
 
     #[test]
-    fn issue1151_insert_picture_body_keeps_existing_inline_behavior() {
+    fn issue1151_v9_insert_picture_body_floating_default() {
+        // [Task #1151 v9 결함 E] 한컴 native 정합: 본문 picture 신규 삽입 시 default =
+        // tac=false (floating, 글자처럼 미체크). 셀 분기와 동일 패턴.
         let mut core = make_test_core();
         let image = minimal_png();
         core.insert_picture_native(
             0,
             0,
             0,
-            &[], // 빈 cell_path → 본문 inline (기존)
+            &[], // 빈 cell_path → 본문 floating (v9 fix 후)
             &image,
             5000,
             5000,
@@ -5997,10 +5907,37 @@ mod issue_1151_cell_picture_insert_tests {
             Control::Picture(p) => Some(p.as_ref()),
             _ => None,
         });
-        let picture = pic_in_body.expect("expected Picture in body paragraph");
+        let picture = pic_in_body.expect("expected Picture in body paragraph (sibling control)");
+
+        // 한컴 native 정합: tac=false, rel_to=Paper, wrap=Square
         assert!(
-            picture.common.treat_as_char,
-            "본문 picture 는 기존대로 inline (treat_as_char=true)"
+            !picture.common.treat_as_char,
+            "본문 picture default = tac=false (한컴 native 정합, v9 결함 E fix)"
+        );
+        assert!(
+            matches!(
+                picture.common.horz_rel_to,
+                crate::model::shape::HorzRelTo::Paper
+            ),
+            "본문 picture horz_rel_to = Paper (셀 분기와 동일)"
+        );
+        assert!(
+            matches!(
+                picture.common.vert_rel_to,
+                crate::model::shape::VertRelTo::Paper
+            ),
+            "본문 picture vert_rel_to = Paper"
+        );
+        assert!(matches!(
+            picture.common.text_wrap,
+            crate::model::shape::TextWrap::Square
+        ));
+
+        // 새 paragraph 생성 안 함 — 기존 paragraph 의 sibling control 로 append
+        assert_eq!(
+            core.document.sections[0].paragraphs.len(),
+            1,
+            "본문 picture 삽입 시 새 paragraph 생성 안 함 (sibling control)"
         );
     }
 
