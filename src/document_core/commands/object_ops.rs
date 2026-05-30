@@ -1623,21 +1623,24 @@ impl DocumentCore {
         if !cell_path.is_empty() {
             // === 셀 floating picture 분기 (#1151 v2 — 한컴 패턴 정합) ===
             // Picture 는 표가 들어있는 paragraph 의 sibling control 로 append 된다.
-            // tac=false, wrap=Square (어울림), horz/vert_rel_to=Page, offset 은 셀의 page bbox 좌상단.
+            // tac=false, wrap=Square (어울림), horz/vert_rel_to=Paper, offset 은 셀의 paper bbox 좌상단.
+            // [Task #1151 v8] 결함 A fix: 한컴 native default 가 Paper (incellpicture.hwp dump
+            // 확인 — horz_rel_to=Paper offset=11845, vert_rel_to=Paper offset=15595). v1 구현이
+            // plan 의 분석을 따르지 않고 Page 로 잘못 설정한 것을 정정.
             let (offset_x_hu, offset_y_hu) =
                 self.compute_cell_page_offset(section_idx, para_idx, cell_path);
 
             // CommonObjAttr (floating):
-            //   bits 3-4=vert_rel_to(1=Page), bits 8-10=horz_rel_to(1=Page),
+            //   bits 3-4=vert_rel_to(0=Paper), bits 8-10=horz_rel_to(0=Paper),
             //   bits 15-17=width_criterion(4=Absolute), bits 18-20=height_criterion(2=Absolute),
             //   bits 21-23=text_wrap(0=Square)
-            let common_attr: u32 = (1 << 3) | (1 << 8) | (4 << 15) | (2 << 18);
+            let common_attr: u32 = (4 << 15) | (2 << 18);
             let common = CommonObjAttr {
                 ctrl_id: 0x67736F20,
                 attr: common_attr,
                 treat_as_char: false,
-                vert_rel_to: VertRelTo::Page,
-                horz_rel_to: HorzRelTo::Page,
+                vert_rel_to: VertRelTo::Paper,
+                horz_rel_to: HorzRelTo::Paper,
                 text_wrap: crate::model::shape::TextWrap::Square,
                 horizontal_offset: offset_x_hu.max(0) as u32,
                 vertical_offset: offset_y_hu.max(0) as u32,
@@ -6210,6 +6213,71 @@ mod issue_1151_v2_tac_toggle_tests {
         // (4) text / char_offsets 불변 (sentinel char 추가하지 않음)
         assert_eq!(para.text, "");
         assert_eq!(para.char_offsets.len(), 0);
+    }
+
+    // ─── [Task #1151 v8 결함 A regression] v1 셀 floating 의 초기 rel_to=Paper ─
+    //
+    // 사용자 한컴 native 시연 (2026-05-30): 한컴이 셀 안 picture 신규 삽입 시
+    // 가로/세로 기준 = "종이" (Paper). v1 plan 의 incellpicture.hwp dump 분석 정합.
+    // v1 구현이 Page 로 잘못 설정한 결함을 정정.
+    #[test]
+    fn v8_cell_floating_picture_uses_paper_rel_to() {
+        let mut core = make_test_core();
+        let table_res = core
+            .create_table_native(0, 0, 0, 1, 1)
+            .expect("create 1x1 table");
+        let table_para_idx = parse_idx(&table_res, "paraIdx");
+        let table_ctrl_idx = parse_idx(&table_res, "controlIdx");
+        let cell_path: Vec<(usize, usize, usize)> = vec![(table_ctrl_idx, 0, 0)];
+        let image = minimal_png();
+        core.insert_picture_native(
+            0,
+            table_para_idx,
+            0,
+            &cell_path,
+            &image,
+            5977,
+            5331,
+            1,
+            1,
+            "png",
+            "test",
+        )
+        .expect("insert floating picture in cell");
+        let pic_ctrl_idx = core.document.sections[0].paragraphs[table_para_idx]
+            .controls
+            .len()
+            - 1;
+        let para = &core.document.sections[0].paragraphs[table_para_idx];
+        let pic = match &para.controls[pic_ctrl_idx] {
+            Control::Picture(p) => p.as_ref(),
+            _ => panic!("not Picture"),
+        };
+
+        // (A) typed field 가 Paper
+        assert!(
+            matches!(pic.common.horz_rel_to, HorzRelTo::Paper),
+            "horz_rel_to = Paper (한컴 native default), got {:?}",
+            pic.common.horz_rel_to
+        );
+        assert!(
+            matches!(pic.common.vert_rel_to, VertRelTo::Paper),
+            "vert_rel_to = Paper, got {:?}",
+            pic.common.vert_rel_to
+        );
+
+        // (B) attr 비트 정합 — bit 3-4 (vert) = 0, bit 8-10 (horz) = 0 (둘 다 Paper)
+        let bits_vert = (pic.common.attr >> 3) & 0b11;
+        let bits_horz = (pic.common.attr >> 8) & 0b111;
+        assert_eq!(bits_vert, 0, "attr bits 3-4 = Paper(0)");
+        assert_eq!(bits_horz, 0, "attr bits 8-10 = Paper(0)");
+
+        // (C) tac=false, wrap=Square 그대로
+        assert!(!pic.common.treat_as_char);
+        assert!(matches!(
+            pic.common.text_wrap,
+            crate::model::shape::TextWrap::Square
+        ));
     }
 
     // ─── Scenario D 등가 ───────────────────────────────────────────────
