@@ -2193,7 +2193,12 @@ impl HwpDocument {
     /// `cell_path_json` 이 빈 문자열 또는 `"[]"` 면 본문 inline 삽입. 그 외에는
     /// 표 셀 영역에 floating picture (한컴 정합) 로 삽입한다.
     /// 예: `[{"controlIndex":0,"cellIndex":2,"cellParaIndex":0}]`
+    /// [Task #1151 v8 결함 C] `paper_offset_x_hu / paper_offset_y_hu` 는 사용자가 셀 안에
+    /// 클릭/드래그한 위치 (paper-relative HU). studio 의 finishImagePlacement 가 drag 좌표를
+    /// 변환하여 전달. JS 측에서 `undefined` 전달 시 (또는 음수) wasm 이 셀 좌상단을 default 사용
+    /// — 기존 동작 호환.
     #[wasm_bindgen(js_name = insertPicture)]
+    #[allow(clippy::too_many_arguments)]
     pub fn insert_picture(
         &mut self,
         section_idx: u32,
@@ -2207,6 +2212,8 @@ impl HwpDocument {
         natural_height_px: u32,
         extension: &str,
         description: &str,
+        paper_offset_x_hu: Option<i32>,
+        paper_offset_y_hu: Option<i32>,
     ) -> Result<String, JsValue> {
         let cell_path: Vec<(usize, usize, usize)> =
             if cell_path_json.is_empty() || cell_path_json == "[]" {
@@ -2226,6 +2233,8 @@ impl HwpDocument {
             natural_height_px,
             extension,
             description,
+            paper_offset_x_hu,
+            paper_offset_y_hu,
         )
         .map_err(|e| e.into())
     }

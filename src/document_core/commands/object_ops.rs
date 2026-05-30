@@ -1525,6 +1525,12 @@ impl DocumentCore {
     ///   Page-relative offset) 로 삽입한다. 셀 자체는 비어있는 채로 유지되어 cursor
     ///   클릭이 정상 동작 (#1151). 한컴 2022 의 셀 이미지 삽입 패턴과 동일
     ///   (incellpicture.hwp 검증).
+    ///
+    /// `paper_offset_x_hu / paper_offset_y_hu`: 셀 floating 분기에서 사용할 paper-relative
+    /// 좌표 (HWPUNIT). `None` 이면 셀 좌상단 (`compute_cell_page_offset`) 을 default 로 사용
+    /// — 기존 동작 + API caller 호환. studio drag 좌표 기반 호출은 `Some` 으로 전달.
+    /// 본문 inline 분기 (cell_path 비어있음) 는 본 매개변수를 사용하지 않는다.
+    #[allow(clippy::too_many_arguments)]
     pub fn insert_picture_native(
         &mut self,
         section_idx: usize,
@@ -1538,6 +1544,8 @@ impl DocumentCore {
         natural_height_px: u32,
         extension: &str,
         description: &str,
+        paper_offset_x_hu: Option<i32>,
+        paper_offset_y_hu: Option<i32>,
     ) -> Result<String, HwpError> {
         use crate::model::bin_data::{
             BinData, BinDataCompression, BinDataContent, BinDataStatus, BinDataType,
@@ -1623,12 +1631,15 @@ impl DocumentCore {
         if !cell_path.is_empty() {
             // === 셀 floating picture 분기 (#1151 v2 — 한컴 패턴 정합) ===
             // Picture 는 표가 들어있는 paragraph 의 sibling control 로 append 된다.
-            // tac=false, wrap=Square (어울림), horz/vert_rel_to=Paper, offset 은 셀의 paper bbox 좌상단.
+            // tac=false, wrap=Square (어울림), horz/vert_rel_to=Paper, offset 은 사용자 클릭/드래그 위치.
             // [Task #1151 v8] 결함 A fix: 한컴 native default 가 Paper (incellpicture.hwp dump
-            // 확인 — horz_rel_to=Paper offset=11845, vert_rel_to=Paper offset=15595). v1 구현이
-            // plan 의 분석을 따르지 않고 Page 로 잘못 설정한 것을 정정.
-            let (offset_x_hu, offset_y_hu) =
-                self.compute_cell_page_offset(section_idx, para_idx, cell_path);
+            // 확인 — horz_rel_to=Paper offset=11845, vert_rel_to=Paper offset=15595).
+            // [Task #1151 v8] 결함 C fix: 사용자가 클릭/드래그한 좌표 (paper-relative HU) 사용 —
+            // 한컴 native 동작 정합. caller (studio) 가 None 전달 시 셀 좌상단 default.
+            let (offset_x_hu, offset_y_hu) = match (paper_offset_x_hu, paper_offset_y_hu) {
+                (Some(x), Some(y)) => (x, y),
+                _ => self.compute_cell_page_offset(section_idx, para_idx, cell_path),
+            };
 
             // CommonObjAttr (floating):
             //   bits 3-4=vert_rel_to(0=Paper), bits 8-10=horz_rel_to(0=Paper),
@@ -5906,6 +5917,8 @@ mod issue_1151_cell_picture_insert_tests {
             1,
             "png",
             "test",
+            None,
+            None,
         )
         .expect("insert picture (floating)");
 
@@ -5968,6 +5981,8 @@ mod issue_1151_cell_picture_insert_tests {
             1,
             "png",
             "test",
+            None,
+            None,
         )
         .expect("insert picture body");
 
@@ -5991,8 +6006,9 @@ mod issue_1151_cell_picture_insert_tests {
             .expect("create table");
         let bad_path: Vec<(usize, usize, usize)> = vec![(0, 5, 0)]; // cell 5 는 1×1 표에 없음
         let image = minimal_png();
-        let res =
-            core.insert_picture_native(0, 0, 0, &bad_path, &image, 5000, 5000, 1, 1, "png", "test");
+        let res = core.insert_picture_native(
+            0, 0, 0, &bad_path, &image, 5000, 5000, 1, 1, "png", "test", None, None,
+        );
         assert!(
             res.is_err(),
             "out-of-range cell path → Err 기대, got {res:?}"
@@ -6143,6 +6159,8 @@ mod issue_1151_v2_tac_toggle_tests {
             1,
             "png",
             "test",
+            None,
+            None,
         )
         .expect("insert floating picture in cell");
 
@@ -6242,6 +6260,8 @@ mod issue_1151_v2_tac_toggle_tests {
             1,
             "png",
             "test",
+            None,
+            None,
         )
         .expect("insert floating picture in cell");
         let pic_ctrl_idx = core.document.sections[0].paragraphs[table_para_idx]
@@ -6343,6 +6363,8 @@ mod issue_1151_v2_tac_toggle_tests {
             1,
             "png",
             "test",
+            None,
+            None,
         )
         .expect("insert floating picture in center cell");
 
@@ -6426,6 +6448,8 @@ mod issue_1151_v2_tac_toggle_tests {
             1,
             "png",
             "test",
+            None,
+            None,
         )
         .expect("insert floating picture in cell");
         let pic_ctrl_idx = core.document.sections[0].paragraphs[table_para_idx]
@@ -6607,6 +6631,8 @@ mod issue_1151_v2_tac_toggle_tests {
             1,
             "png",
             "test",
+            None,
+            None,
         )
         .expect("insert");
         let pic_ctrl_idx = core.document.sections[0].paragraphs[table_para_idx]

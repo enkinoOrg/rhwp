@@ -835,9 +835,16 @@ export class WasmBridge {
                 cellPathJson: string,
                 imageData: Uint8Array, width: number, height: number,
                 naturalWidthPx: number, naturalHeightPx: number,
-                extension: string, description: string = ''): { ok: boolean; paraIdx: number; controlIdx: number } {
+                extension: string, description: string = '',
+                // [Task #1151 v8 결함 C] 사용자 클릭/드래그 paper-relative 좌표 (HU).
+                // 셀 floating 분기에서 사용. undefined 면 셀 좌상단 default (기존 동작).
+                paperOffsetXHu?: number, paperOffsetYHu?: number): { ok: boolean; paraIdx: number; controlIdx: number } {
     if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
-    return JSON.parse(this.doc.insertPicture(sec, paraIdx, charOffset, cellPathJson, imageData, width, height, naturalWidthPx, naturalHeightPx, extension, description));
+    return JSON.parse(this.doc.insertPicture(
+      sec, paraIdx, charOffset, cellPathJson, imageData,
+      width, height, naturalWidthPx, naturalHeightPx, extension, description,
+      paperOffsetXHu, paperOffsetYHu,
+    ));
   }
 
   // ── 그림 속성 API ─────────────────────────────────────

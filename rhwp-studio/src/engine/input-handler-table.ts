@@ -291,6 +291,27 @@ export function finishImagePlacement(this: any, e: MouseEvent): void {
   let wHwp = Math.round(wPx * 75);
   let hHwp = Math.round(hPx * 75);
 
+  // [Task #1151 v8 결함 C] 셀 안 floating picture 의 paper-relative offset 계산.
+  // 사용자가 드래그/클릭한 위치 (drag.startClientX/Y) 를 page (= paper) 좌표로 변환.
+  // 본문 inline 분기 (inCell=false) 는 wasm 이 무시하므로 undefined 전달.
+  let paperOffsetXHu: number | undefined;
+  let paperOffsetYHu: number | undefined;
+  if (inCell) {
+    const scrollContent = this.container.querySelector('#scroll-content');
+    if (scrollContent) {
+      const contentRect = scrollContent.getBoundingClientRect();
+      const dragContentX = drag.startClientX - contentRect.left;
+      const dragContentY = drag.startClientY - contentRect.top;
+      const pageIdx = this.virtualScroll.getPageAtPoint(dragContentX, dragContentY);
+      const pageOffset = this.virtualScroll.getPageOffset(pageIdx);
+      const pageLeft = this.virtualScroll.getPageLeftResolved(pageIdx, scrollContent.clientWidth);
+      const dragPageX = (dragContentX - pageLeft) / zoom;
+      const dragPageY = (dragContentY - pageOffset) / zoom;
+      paperOffsetXHu = Math.round(dragPageX * 75);
+      paperOffsetYHu = Math.round(dragPageY * 75);
+    }
+  }
+
   // 열 폭 초과 시 비례 축소
   try {
     const pageDef = this.wasm.getPageDef(sec);
@@ -307,7 +328,12 @@ export function finishImagePlacement(this: any, e: MouseEvent): void {
 
   // WASM 호출
   try {
-    const result = this.wasm.insertPicture(sec, paraIdx, charOffset, cellPathJson, imgData.data, wHwp, hHwp, imgData.naturalWidth, imgData.naturalHeight, imgData.ext, desc);
+    const result = this.wasm.insertPicture(
+      sec, paraIdx, charOffset, cellPathJson, imgData.data,
+      wHwp, hHwp, imgData.naturalWidth, imgData.naturalHeight,
+      imgData.ext, desc,
+      paperOffsetXHu, paperOffsetYHu,
+    );
     if (result.ok) {
       this.eventBus.emit('document-changed');
     }
