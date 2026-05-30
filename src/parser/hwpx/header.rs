@@ -1315,9 +1315,20 @@ fn parse_border_fill(
                                 pattern_type: -1,
                                 ..SolidFill::default()
                             };
+                            // [Issue #1172] faceColor="none" 은 "배경 채우기 없음" 을 뜻한다.
+                            // 무늬(hatchStyle) 도 없으면 이 winBrush 는 빈 채우기이므로
+                            // FillType::None 으로 둔다. 종전엔 winBrush 존재만으로 무조건
+                            // Solid 로 처리해 faceColor="none" 배경이 흰색 Solid 로 잘못
+                            // 해석되어, 문단모양/렌더에 의도치 않은 배경이 생겼다.
+                            let mut face_is_none = false;
                             for attr in ce.attributes().flatten() {
                                 match attr.key.as_ref() {
-                                    b"faceColor" => solid.background_color = parse_color(&attr),
+                                    b"faceColor" => {
+                                        if attr_str(&attr).eq_ignore_ascii_case("none") {
+                                            face_is_none = true;
+                                        }
+                                        solid.background_color = parse_color(&attr);
+                                    }
                                     b"hatchColor" => solid.pattern_color = parse_color(&attr),
                                     b"hatchStyle" => {
                                         if let Some(pattern_type) =
@@ -1336,7 +1347,12 @@ fn parse_border_fill(
                                     _ => {}
                                 }
                             }
-                            bf.fill.solid = Some(solid);
+                            // faceColor=none + 무늬 없음 → 채우기 없음
+                            if face_is_none && solid.pattern_type < 0 {
+                                bf.fill.fill_type = FillType::None;
+                            } else {
+                                bf.fill.solid = Some(solid);
+                            }
                         }
                         b"gradation" => {
                             bf.fill.fill_type = FillType::Gradient;
