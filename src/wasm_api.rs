@@ -16,11 +16,13 @@ use web_sys::HtmlCanvasElement;
 
 use crate::document_core::{DocumentCore, DEFAULT_FALLBACK_FONT};
 use crate::error::HwpError;
+use crate::model::bin_data::BinDataContent;
 use crate::model::control::Control;
 use crate::model::document::{Document, Section};
 use crate::model::page::ColumnDef;
 use crate::model::paragraph::Paragraph;
 use crate::model::path::{path_from_flat, DocumentPath, PathSegment};
+use crate::model::shape::ShapeObject;
 use crate::renderer::canvas::CanvasRenderer;
 use crate::renderer::composer::{
     compose_paragraph, compose_section, reflow_line_segs, ComposedParagraph,
@@ -87,6 +89,84 @@ fn normalize_canvas_scale(
 #[cfg(target_arch = "wasm32")]
 fn scaled_canvas_extent(page_extent: f64, scale: f64) -> u32 {
     (page_extent * scale).max(1.0).min(MAX_CANVAS_DIMENSION) as u32
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExternalImageReference {
+    key: String,
+    bin_data_id: u16,
+    original_path: String,
+    basename: String,
+    extension: String,
+    loaded: bool,
+}
+
+fn external_path_basename(path: &str) -> &str {
+    path.rsplit(|c| c == '/' || c == '\\')
+        .find(|part| !part.is_empty())
+        .unwrap_or(path)
+}
+
+fn external_path_extension(basename: &str) -> String {
+    std::path::Path::new(basename)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+fn external_image_loaded(bin_data_content: &[BinDataContent], bin_data_id: u16) -> bool {
+    if bin_data_id == 0 {
+        return false;
+    }
+
+    if let Some(content) = bin_data_content.get((bin_data_id - 1) as usize) {
+        return !content.data.is_empty();
+    }
+
+    bin_data_content
+        .iter()
+        .any(|content| content.id == bin_data_id && !content.data.is_empty())
+}
+
+fn collect_external_image_references(document: &Document) -> Vec<ExternalImageReference> {
+    let mut references = std::collections::BTreeMap::new();
+
+    for section in &document.sections {
+        for para in &section.paragraphs {
+            for ctrl in &para.controls {
+                let pic = match ctrl {
+                    Control::Picture(pic) => pic,
+                    Control::Shape(shape) => match shape.as_ref() {
+                        ShapeObject::Picture(pic) => pic,
+                        _ => continue,
+                    },
+                    _ => continue,
+                };
+
+                let Some(original_path) = pic.image_attr.external_path.as_ref() else {
+                    continue;
+                };
+
+                let bin_data_id = pic.image_attr.bin_data_id;
+                references.entry(bin_data_id).or_insert_with(|| {
+                    let basename = external_path_basename(original_path).to_string();
+                    ExternalImageReference {
+                        key: format!("binData:{bin_data_id}"),
+                        bin_data_id,
+                        extension: external_path_extension(&basename),
+                        basename,
+                        original_path: original_path.clone(),
+                        loaded: external_image_loaded(&document.bin_data_content, bin_data_id),
+                    }
+                });
+            }
+        }
+    }
+
+    references.into_values().collect()
 }
 
 /// WASM에서 사용할 HWP 문서 래퍼
@@ -2225,39 +2305,12 @@ impl HwpDocument {
     /// 반환: JSON 배열 `["oracle.gif", "rdb02.gif", ...]` (중복 제거)
     #[wasm_bindgen(js_name = getExternalImageBasenames)]
     pub fn get_external_image_basenames(&self) -> String {
-        use crate::model::control::Control;
-        use crate::model::shape::ShapeObject;
         use std::collections::BTreeSet;
 
         let mut names: BTreeSet<String> = BTreeSet::new();
-        for section in &self.document().sections {
-            for para in &section.paragraphs {
-                for ctrl in &para.controls {
-                    let pic = match ctrl {
-                        Control::Picture(p) => p,
-                        Control::Shape(s) => match s.as_ref() {
-                            ShapeObject::Picture(p) => p,
-                            _ => continue,
-                        },
-                        _ => continue,
-                    };
-                    if let Some(ref path) = pic.image_attr.external_path {
-                        let id = pic.image_attr.bin_data_id;
-                        let already_loaded = self
-                            .document()
-                            .bin_data_content
-                            .iter()
-                            .any(|c| c.id == id && !c.data.is_empty());
-                        if already_loaded {
-                            continue;
-                        }
-                        let basename = path
-                            .rsplit(|c| c == '/' || c == '\\')
-                            .next()
-                            .unwrap_or(path);
-                        names.insert(basename.to_string());
-                    }
-                }
+        for reference in collect_external_image_references(self.document()) {
+            if !reference.loaded {
+                names.insert(reference.basename);
             }
         }
         let arr: Vec<String> = names.into_iter().collect();
