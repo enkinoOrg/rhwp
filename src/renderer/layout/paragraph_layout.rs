@@ -2683,6 +2683,12 @@ impl LayoutEngine {
                                         None
                                     };
                                     let img_id = tree.next_id();
+                                    // [Task #1151 v7 항목 1] cell_ctx 의 3 필드 매핑은
+                                    // CellContext::last_image_indices() 로 통합.
+                                    let (cei, cpi, otci) = cell_ctx
+                                        .as_ref()
+                                        .map(|c| c.last_image_indices())
+                                        .unwrap_or((None, None, None));
                                     let img_node = RenderNode::new(
                                         img_id,
                                         RenderNodeType::Image(ImageNode {
@@ -2695,17 +2701,9 @@ impl LayoutEngine {
                                                     .unwrap_or(para_index),
                                             ),
                                             control_index: Some(tac_ci),
-                                            // [Task #1151 v4] 셀 안 inline picture 의 cell context
-                                            // 보존. cell_ctx 가 None 이면 None → 회귀 0.
-                                            cell_index: cell_ctx
-                                                .as_ref()
-                                                .and_then(|c| c.path.last().map(|e| e.cell_index)),
-                                            cell_para_index: cell_ctx.as_ref().and_then(|c| {
-                                                c.path.last().map(|e| e.cell_para_index)
-                                            }),
-                                            outer_table_control_index: cell_ctx.as_ref().and_then(
-                                                |c| c.path.last().map(|e| e.control_index),
-                                            ),
+                                            cell_index: cei,
+                                            cell_para_index: cpi,
+                                            outer_table_control_index: otci,
                                             crop,
                                             original_size_hu,
                                             effect: pic.image_attr.effect,
@@ -3079,6 +3077,11 @@ impl LayoutEngine {
                                     None
                                 };
                                 let img_id = tree.next_id();
+                                // [Task #1151 v7 항목 1] cell_ctx 의 3 필드 매핑 통합.
+                                let (cei, cpi, otci) = cell_ctx
+                                    .as_ref()
+                                    .map(|c| c.last_image_indices())
+                                    .unwrap_or((None, None, None));
                                 let img_node = RenderNode::new(
                                     img_id,
                                     RenderNodeType::Image(ImageNode {
@@ -3091,16 +3094,9 @@ impl LayoutEngine {
                                                 .unwrap_or(para_index),
                                         ),
                                         control_index: Some(tac_ci),
-                                        // [Task #1151 v4] 셀 안 inline picture 의 cell context 보존.
-                                        cell_index: cell_ctx
-                                            .as_ref()
-                                            .and_then(|c| c.path.last().map(|e| e.cell_index)),
-                                        outer_table_control_index: cell_ctx
-                                            .as_ref()
-                                            .and_then(|c| c.path.last().map(|e| e.control_index)),
-                                        cell_para_index: cell_ctx
-                                            .as_ref()
-                                            .and_then(|c| c.path.last().map(|e| e.cell_para_index)),
+                                        cell_index: cei,
+                                        cell_para_index: cpi,
+                                        outer_table_control_index: otci,
                                         crop,
                                         original_size_hu,
                                         effect: pic.image_attr.effect,
@@ -3243,6 +3239,11 @@ impl LayoutEngine {
                                         None
                                     };
                                     let img_id = tree.next_id();
+                                    // [Task #1151 v7 항목 1] cell_ctx 의 3 필드 매핑 통합.
+                                    let (cei, cpi, otci) = cell_ctx
+                                        .as_ref()
+                                        .map(|c| c.last_image_indices())
+                                        .unwrap_or((None, None, None));
                                     let img_node = RenderNode::new(
                                         img_id,
                                         RenderNodeType::Image(ImageNode {
@@ -3255,18 +3256,9 @@ impl LayoutEngine {
                                                     .unwrap_or(para_index),
                                             ),
                                             control_index: Some(tac_ci),
-                                            // [Task #1151 v4] 셀 안 inline picture 의 cell context
-                                            // 보존 — rendering.rs JSON 출력의 cellIdx/cellParaIdx
-                                            // 로 노출되어 cursor_rect hit-test 가 인식.
-                                            cell_index: cell_ctx
-                                                .as_ref()
-                                                .and_then(|c| c.path.last().map(|e| e.cell_index)),
-                                            outer_table_control_index: cell_ctx.as_ref().and_then(
-                                                |c| c.path.last().map(|e| e.control_index),
-                                            ),
-                                            cell_para_index: cell_ctx.as_ref().and_then(|c| {
-                                                c.path.last().map(|e| e.cell_para_index)
-                                            }),
+                                            cell_index: cei,
+                                            cell_para_index: cpi,
+                                            outer_table_control_index: otci,
                                             crop,
                                             original_size_hu,
                                             effect: pic.image_attr.effect,

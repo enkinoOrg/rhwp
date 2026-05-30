@@ -153,11 +153,11 @@ impl LayoutEngine {
             };
 
         // 이미지 노드 생성
-        // [Task #1151 v4] 셀 안 picture 인 경우 cell context 보존.
-        let cell_index_v4 = cell_ctx.and_then(|c| c.path.last().map(|e| e.cell_index));
-        let cell_para_index_v4 = cell_ctx.and_then(|c| c.path.last().map(|e| e.cell_para_index));
-        let outer_table_control_index_v4 =
-            cell_ctx.and_then(|c| c.path.last().map(|e| e.control_index));
+        // [Task #1151 v7 항목 1] cell_ctx 의 3 필드 매핑은 CellContext::last_image_indices()
+        // 로 통합 (이전: 각 필드마다 path.last() 호출 반복).
+        let (cei, cpi, otci) = cell_ctx
+            .map(|c| c.last_image_indices())
+            .unwrap_or((None, None, None));
         let img_id = tree.next_id();
         let img_node = RenderNode::new(
             img_id,
@@ -174,9 +174,9 @@ impl LayoutEngine {
                 transform: extract_shape_transform(&picture.shape_attr),
                 external_path: picture.image_attr.external_path.clone(),
                 header_footer_ref: header_footer_ref.clone(),
-                cell_index: cell_index_v4,
-                cell_para_index: cell_para_index_v4,
-                outer_table_control_index: outer_table_control_index_v4,
+                cell_index: cei,
+                cell_para_index: cpi,
+                outer_table_control_index: otci,
                 ..ImageNode::new(bin_data_id, image_data)
             }),
             BoundingBox::new(pic_x, pic_y, pic_width, pic_height),

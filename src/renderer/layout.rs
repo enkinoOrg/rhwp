@@ -94,6 +94,20 @@ impl CellContext {
     pub fn text_direction(&self) -> u8 {
         self.innermost().text_direction
     }
+
+    /// (cell_index, cell_para_index, outer_table_control_index) — 최내곽 entry 의 3 필드.
+    /// ImageNode / RectangleNode 등의 cell context 3 필드 매핑 boilerplate 통합용.
+    /// path 가 비어있으면 (None, None, None).
+    pub fn last_image_indices(&self) -> (Option<usize>, Option<usize>, Option<usize>) {
+        match self.path.last() {
+            Some(e) => (
+                Some(e.cell_index),
+                Some(e.cell_para_index),
+                Some(e.control_index),
+            ),
+            None => (None, None, None),
+        }
+    }
 }
 
 fn para_has_visible_text(para: &Paragraph) -> bool {
