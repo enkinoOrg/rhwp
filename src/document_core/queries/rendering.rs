@@ -613,6 +613,14 @@ impl DocumentCore {
             );
             write_json_str(buf, wrap_str(wrap));
 
+            if let Some((left, top, right, bottom)) = image.crop {
+                let _ = write!(
+                    buf,
+                    ",\"crop\":{{\"left\":{},\"top\":{},\"right\":{},\"bottom\":{}}}",
+                    left, top, right, bottom
+                );
+            }
+
             let attr = crate::model::image::ImageAttr {
                 brightness: image.brightness,
                 contrast: image.contrast,
@@ -649,34 +657,42 @@ impl DocumentCore {
                 LayerNodeKind::ClipRect { child, .. } => collect(child, behind, front, image_count),
                 LayerNodeKind::Leaf { ops } => {
                     for op in ops {
-                        if let PaintOp::Image {
-                            bbox,
-                            image,
-                            resolved,
-                        } = op
-                        {
-                            *image_count += 1;
-                            match image.text_wrap {
-                                Some(TextWrap::BehindText) => {
-                                    write_overlay_image(
-                                        behind,
-                                        *bbox,
-                                        image,
-                                        resolved.as_deref(),
-                                        TextWrap::BehindText,
-                                    );
+                        match op {
+                            PaintOp::Image {
+                                bbox,
+                                image,
+                                resolved,
+                            } => {
+                                *image_count += 1;
+                                match image.text_wrap {
+                                    Some(TextWrap::BehindText) => {
+                                        write_overlay_image(
+                                            behind,
+                                            *bbox,
+                                            image,
+                                            resolved.as_deref(),
+                                            TextWrap::BehindText,
+                                        );
+                                    }
+                                    Some(TextWrap::InFrontOfText) => {
+                                        write_overlay_image(
+                                            front,
+                                            *bbox,
+                                            image,
+                                            resolved.as_deref(),
+                                            TextWrap::InFrontOfText,
+                                        );
+                                    }
+                                    _ => {}
                                 }
-                                Some(TextWrap::InFrontOfText) => {
-                                    write_overlay_image(
-                                        front,
-                                        *bbox,
-                                        image,
-                                        resolved.as_deref(),
-                                        TextWrap::InFrontOfText,
-                                    );
-                                }
-                                _ => {}
                             }
+                            // OLE/차트 미리보기 등은 RawSvg 로 emit 되며 web_canvas 의 draw_image
+                            // 경로(IMAGE_CACHE 비동기 디코드)를 그대로 탄다. scheduleReRender 재시도
+                            // 발화를 위해 image_count 에 포함한다.
+                            PaintOp::RawSvg { .. } => {
+                                *image_count += 1;
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -697,16 +713,56 @@ impl DocumentCore {
 
     /// 페이지 정보 (네이티브 에러 타입)
     pub fn get_page_info_native(&self, page_num: u32) -> Result<String, HwpError> {
+        use crate::model::page::PageBorderBasis;
         use crate::renderer::hwpunit_to_px;
+        use crate::renderer::layout::body_page_border_outset;
         let (page_content, _, _) = self.find_page(page_num)?;
         let sec_idx = page_content.section_index;
-        let page_def = &self.document.sections[sec_idx].section_def.page_def;
+        let section_def = &self.document.sections[sec_idx].section_def;
+        let page_def = &section_def.page_def;
+        let page_border_fill = &section_def.page_border_fill;
         let ml = hwpunit_to_px(page_def.margin_left as i32, self.dpi);
         let mr = hwpunit_to_px(page_def.margin_right as i32, self.dpi);
         let mt = hwpunit_to_px(page_def.margin_top as i32, self.dpi);
         let mb = hwpunit_to_px(page_def.margin_bottom as i32, self.dpi);
         let mh = hwpunit_to_px(page_def.margin_header as i32, self.dpi);
         let mf = hwpunit_to_px(page_def.margin_footer as i32, self.dpi);
+        let pbf_left = hwpunit_to_px(page_border_fill.spacing_left as i32, self.dpi);
+        let pbf_right = hwpunit_to_px(page_border_fill.spacing_right as i32, self.dpi);
+        let pbf_top = hwpunit_to_px(page_border_fill.spacing_top as i32, self.dpi);
+        let pbf_bottom = hwpunit_to_px(page_border_fill.spacing_bottom as i32, self.dpi);
+        let body_top = mt + mh;
+        let body_bottom_margin = mb + mf;
+        let visual_outsets = if matches!(page_border_fill.basis, PageBorderBasis::BodyBased)
+            && page_border_fill.border_fill_id > 0
+        {
+            self.document
+                .doc_info
+                .border_fills
+                .get((page_border_fill.border_fill_id - 1) as usize)
+                .map(|bf| {
+                    (
+                        body_page_border_outset(&bf.borders[0]),
+                        body_page_border_outset(&bf.borders[1]),
+                        body_page_border_outset(&bf.borders[2]),
+                        body_page_border_outset(&bf.borders[3]),
+                    )
+                })
+                .unwrap_or((0.0, 0.0, 0.0, 0.0))
+        } else {
+            (0.0, 0.0, 0.0, 0.0)
+        };
+        let (out_l, out_r, out_t, _out_b) = visual_outsets;
+        let (page_border_left, page_border_right, page_border_top, page_border_bottom) =
+            match page_border_fill.basis {
+                PageBorderBasis::PaperBased => (pbf_left, pbf_right, pbf_top, pbf_bottom),
+                PageBorderBasis::BodyBased => (
+                    (ml - pbf_left - out_l).max(0.0),
+                    (mr - pbf_right - out_r).max(0.0),
+                    (body_top - pbf_top - out_t).max(0.0),
+                    (body_bottom_margin - pbf_bottom).max(0.0),
+                ),
+            };
         // 단별 영역 정보
         let cols_json: String = page_content
             .layout
@@ -718,7 +774,9 @@ impl DocumentCore {
         Ok(format!(
             "{{\"pageIndex\":{},\"width\":{:.1},\"height\":{:.1},\"sectionIndex\":{},\
             \"marginLeft\":{:.1},\"marginRight\":{:.1},\"marginTop\":{:.1},\"marginBottom\":{:.1},\
-            \"marginHeader\":{:.1},\"marginFooter\":{:.1},\"columns\":[{}]}}",
+            \"marginHeader\":{:.1},\"marginFooter\":{:.1},\
+            \"pageBorderLeft\":{:.1},\"pageBorderRight\":{:.1},\"pageBorderTop\":{:.1},\"pageBorderBottom\":{:.1},\
+            \"columns\":[{}]}}",
             page_content.page_index,
             page_content.layout.page_width,
             page_content.layout.page_height,
@@ -729,6 +787,10 @@ impl DocumentCore {
             mb,
             mh,
             mf,
+            page_border_left,
+            page_border_right,
+            page_border_top,
+            page_border_bottom,
             cols_json,
         ))
     }
@@ -883,6 +945,215 @@ impl DocumentCore {
         for idx in 0..count {
             self.apply_section_def_json(idx, json)?;
         }
+        let page_count = self.recompose_and_paginate();
+        Ok(format!("{{\"ok\":true,\"pageCount\":{}}}", page_count))
+    }
+
+    /// 구역의 쪽 테두리/배경 설정을 JSON으로 반환한다.
+    pub fn get_page_border_fill_native(&self, section_idx: usize) -> Result<String, HwpError> {
+        use crate::document_core::helpers::{border_line_type_to_u8_val, color_ref_to_css};
+        use crate::model::page::PageBorderUiBasis;
+        use crate::model::style::FillType;
+
+        let section = self
+            .document
+            .sections
+            .get(section_idx)
+            .ok_or_else(|| HwpError::RenderError(format!("구역 {} 범위 초과", section_idx)))?;
+        let pbf = &section.section_def.page_border_fill;
+        let basis = match pbf.ui_basis {
+            PageBorderUiBasis::Paper => "paper",
+            PageBorderUiBasis::Page => "page",
+        };
+        let fill_area = match (pbf.attr >> 3) & 0x03 {
+            1 => "page",
+            2 => "border",
+            _ => "paper",
+        };
+        let mut border_json = concat!(
+            "\"borderLeft\":{\"type\":0,\"width\":0,\"color\":\"#000000\"},",
+            "\"borderRight\":{\"type\":0,\"width\":0,\"color\":\"#000000\"},",
+            "\"borderTop\":{\"type\":0,\"width\":0,\"color\":\"#000000\"},",
+            "\"borderBottom\":{\"type\":0,\"width\":0,\"color\":\"#000000\"},",
+            "\"fillType\":\"none\",\"fillColor\":\"#ffffff\",\"patternColor\":\"#000000\",\"patternType\":0"
+        )
+        .to_string();
+
+        if pbf.border_fill_id > 0 {
+            if let Some(bf) = self
+                .document
+                .doc_info
+                .border_fills
+                .get((pbf.border_fill_id - 1) as usize)
+            {
+                let dir_names = ["Left", "Right", "Top", "Bottom"];
+                let borders = bf
+                    .borders
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, border)| {
+                        format!(
+                            "\"border{}\":{{\"type\":{},\"width\":{},\"color\":\"{}\"}}",
+                            dir_names[idx],
+                            border_line_type_to_u8_val(border.line_type),
+                            border.width,
+                            color_ref_to_css(border.color)
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let (fill_type, fill_color, pattern_color, pattern_type) =
+                    match (&bf.fill.fill_type, &bf.fill.solid) {
+                        (FillType::Solid, Some(solid)) => (
+                            "solid",
+                            color_ref_to_css(solid.background_color),
+                            color_ref_to_css(solid.pattern_color),
+                            solid.pattern_type,
+                        ),
+                        _ => ("none", "#ffffff".to_string(), "#000000".to_string(), 0),
+                    };
+                border_json = format!(
+                    "{},\"fillType\":\"{}\",\"fillColor\":\"{}\",\"patternColor\":\"{}\",\"patternType\":{}",
+                    borders, fill_type, fill_color, pattern_color, pattern_type
+                );
+            }
+        }
+
+        Ok(format!(
+            "{{\"attr\":{},\"basis\":\"{}\",\"spacingLeft\":{},\"spacingRight\":{},\"spacingTop\":{},\"spacingBottom\":{},\
+            \"borderFillId\":{},\"headerInside\":{},\"footerInside\":{},\"fillArea\":\"{}\",\
+            \"hideBorder\":{},\"hideFill\":{},{} }}",
+            pbf.attr,
+            basis,
+            pbf.spacing_left,
+            pbf.spacing_right,
+            pbf.spacing_top,
+            pbf.spacing_bottom,
+            pbf.border_fill_id,
+            (pbf.attr & 0x02) != 0,
+            (pbf.attr & 0x04) != 0,
+            fill_area,
+            section.section_def.hide_border,
+            section.section_def.hide_fill,
+            border_json,
+        ))
+    }
+
+    /// 구역의 쪽 테두리/배경 설정을 JSON에서 업데이트하고 재조판한다.
+    pub fn set_page_border_fill_native(
+        &mut self,
+        section_idx: usize,
+        json: &str,
+    ) -> Result<String, HwpError> {
+        use crate::document_core::helpers::{json_bool, json_i16, json_str, json_u32};
+        use crate::model::page::{PageBorderBasis, PageBorderUiBasis};
+
+        let border_fill_id = self.create_border_fill_from_json(json);
+        let section = self
+            .document
+            .sections
+            .get_mut(section_idx)
+            .ok_or_else(|| HwpError::RenderError(format!("구역 {} 범위 초과", section_idx)))?;
+        let sd = &mut section.section_def;
+        let pbf = &mut sd.page_border_fill;
+
+        if let Some(v) = json_i16(json, "spacingLeft") {
+            pbf.spacing_left = v;
+        }
+        if let Some(v) = json_i16(json, "spacingRight") {
+            pbf.spacing_right = v;
+        }
+        if let Some(v) = json_i16(json, "spacingTop") {
+            pbf.spacing_top = v;
+        }
+        if let Some(v) = json_i16(json, "spacingBottom") {
+            pbf.spacing_bottom = v;
+        }
+
+        let mut attr = pbf.attr;
+        if let Some(basis) = json_str(json, "basis") {
+            if basis == "paper" {
+                pbf.ui_basis = PageBorderUiBasis::Paper;
+                pbf.basis = PageBorderBasis::PaperBased;
+                attr &= !0x01;
+            } else {
+                pbf.ui_basis = PageBorderUiBasis::Page;
+                pbf.basis = PageBorderBasis::BodyBased;
+                attr |= 0x01;
+            }
+        }
+        if let Some(v) = json_bool(json, "headerInside") {
+            if v {
+                attr |= 0x02;
+            } else {
+                attr &= !0x02;
+            }
+        }
+        if let Some(v) = json_bool(json, "footerInside") {
+            if v {
+                attr |= 0x04;
+            } else {
+                attr &= !0x04;
+            }
+        }
+        if let Some(area) = json_str(json, "fillArea") {
+            attr &= !(0x03 << 3);
+            attr |= match area.as_str() {
+                "page" => 0x01 << 3,
+                "border" => 0x02 << 3,
+                _ => 0,
+            };
+        }
+        pbf.attr = attr;
+        pbf.border_fill_id = border_fill_id;
+
+        let apply_page = json_str(json, "applyPage").unwrap_or_else(|| "all".to_string());
+        let hide_first = apply_page == "exceptFirst";
+        if let Some(v) = json_bool(json, "hideBorder") {
+            sd.hide_border = v;
+        } else {
+            sd.hide_border = hide_first;
+        }
+        if let Some(v) = json_bool(json, "hideFill") {
+            sd.hide_fill = v;
+        } else {
+            sd.hide_fill = hide_first;
+        }
+
+        let flags = &mut sd.flags;
+        if pbf.ui_basis == PageBorderUiBasis::Page {
+            pbf.attr |= 0x01;
+        } else {
+            pbf.attr &= !0x01;
+        }
+        if sd.hide_border {
+            *flags |= 0x0008;
+        } else {
+            *flags &= !0x0008;
+        }
+        if sd.hide_fill {
+            *flags |= 0x0010;
+        } else {
+            *flags &= !0x0010;
+        }
+        if let Some(raw) = json_u32(json, "attr") {
+            pbf.attr = (pbf.attr & 0x0000_001f) | (raw & !0x0000_001f);
+        }
+
+        let updated_sd = sd.clone();
+        if let Some(para) = section.paragraphs.get_mut(0) {
+            for ctrl in &mut para.controls {
+                if let Control::SectionDef(ref mut ctrl_sd) = ctrl {
+                    ctrl_sd.page_border_fill = updated_sd.page_border_fill.clone();
+                    ctrl_sd.hide_border = updated_sd.hide_border;
+                    ctrl_sd.hide_fill = updated_sd.hide_fill;
+                    ctrl_sd.flags = updated_sd.flags;
+                    break;
+                }
+            }
+        }
+
+        section.raw_stream = None;
         let page_count = self.recompose_and_paginate();
         Ok(format!("{{\"ok\":true,\"pageCount\":{}}}", page_count))
     }
@@ -1183,11 +1454,22 @@ impl DocumentCore {
                         }
                         _ => String::new(),
                     };
+                    let note_ref = eq_node.note_ref.as_ref().map_or_else(String::new, |r| {
+                        format!(
+                            ",\"noteRef\":{{\"kind\":\"{}\",\"sectionIdx\":{},\"paraIdx\":{},\"controlIdx\":{},\"noteParaIdx\":{},\"innerControlIdx\":{}}}",
+                            r.kind,
+                            r.section_index,
+                            r.para_index,
+                            r.control_index,
+                            r.note_para_index,
+                            r.inner_control_index
+                        )
+                    });
 
                     controls.push(format!(
-                        "{{\"type\":\"equation\",\"x\":{:.1},\"y\":{:.1},\"w\":{:.1},\"h\":{:.1}{}{}}}",
+                        "{{\"type\":\"equation\",\"x\":{:.1},\"y\":{:.1},\"w\":{:.1},\"h\":{:.1}{}{}{}}}",
                         node.bbox.x, node.bbox.y, node.bbox.width, node.bbox.height,
-                        doc_coords, cell_coords
+                        doc_coords, cell_coords, note_ref
                     ));
                     return;
                 }
@@ -1237,11 +1519,24 @@ impl DocumentCore {
                         }
                         None => String::new(),
                     };
-
+                    // [Task #1151 v4] 셀 안 inline picture 의 cellIdx/cellParaIdx /
+                    // outerTableControlIdx 전달. RectangleNode 처리 (라인 1533-1546)
+                    // 와 동일 패턴. 셀 외부 picture 는 cell_index 등이 None → 빈 문자열
+                    // → 기존 JSON 출력 그대로 (회귀 0).
+                    let cell_str = match (image_node.cell_index, image_node.cell_para_index) {
+                        (Some(cei), Some(cpi)) => {
+                            format!(",\"cellIdx\":{},\"cellParaIdx\":{}", cei, cpi)
+                        }
+                        _ => String::new(),
+                    };
+                    let outer_table_str = match image_node.outer_table_control_index {
+                        Some(otci) => format!(",\"outerTableControlIdx\":{}", otci),
+                        None => String::new(),
+                    };
                     controls.push(format!(
-                        "{{\"type\":\"image\",\"x\":{:.1},\"y\":{:.1},\"w\":{:.1},\"h\":{:.1}{}{}{}}}",
+                        "{{\"type\":\"image\",\"x\":{:.1},\"y\":{:.1},\"w\":{:.1},\"h\":{:.1}{}{}{}{}{}}}",
                         node.bbox.x, node.bbox.y, node.bbox.width, node.bbox.height,
-                        doc_coords, wrap_str, hf_str
+                        doc_coords, wrap_str, hf_str, cell_str, outer_table_str
                     ));
                     return;
                 }
@@ -1266,10 +1561,21 @@ impl DocumentCore {
                         rect_node.para_index,
                         rect_node.control_index,
                     ) {
+                        // [Task #1138] 표 셀 안 사각형: cellIdx/cellParaIdx/outerTableControlIdx
+                        let cell_str = match (rect_node.cell_index, rect_node.cell_para_index) {
+                            (Some(cei), Some(cpi)) => {
+                                format!(",\"cellIdx\":{},\"cellParaIdx\":{}", cei, cpi)
+                            }
+                            _ => String::new(),
+                        };
+                        let outer_table_str = match rect_node.outer_table_control_index {
+                            Some(otci) => format!(",\"outerTableControlIdx\":{}", otci),
+                            None => String::new(),
+                        };
                         controls.push(format!(
-                            "{{\"type\":\"shape\",\"x\":{:.1},\"y\":{:.1},\"w\":{:.1},\"h\":{:.1},\"secIdx\":{},\"paraIdx\":{},\"controlIdx\":{}}}",
+                            "{{\"type\":\"shape\",\"x\":{:.1},\"y\":{:.1},\"w\":{:.1},\"h\":{:.1},\"secIdx\":{},\"paraIdx\":{},\"controlIdx\":{}{}{}}}",
                             node.bbox.x, node.bbox.y, node.bbox.width, node.bbox.height,
-                            si, pi, ci
+                            si, pi, ci, cell_str, outer_table_str
                         ));
                         return;
                     }
@@ -1280,11 +1586,22 @@ impl DocumentCore {
                         line_node.para_index,
                         line_node.control_index,
                     ) {
+                        // [Task #1138] 표 셀 안 직선
+                        let cell_str = match (line_node.cell_index, line_node.cell_para_index) {
+                            (Some(cei), Some(cpi)) => {
+                                format!(",\"cellIdx\":{},\"cellParaIdx\":{}", cei, cpi)
+                            }
+                            _ => String::new(),
+                        };
+                        let outer_table_str = match line_node.outer_table_control_index {
+                            Some(otci) => format!(",\"outerTableControlIdx\":{}", otci),
+                            None => String::new(),
+                        };
                         controls.push(format!(
-                            "{{\"type\":\"line\",\"x\":{:.1},\"y\":{:.1},\"w\":{:.1},\"h\":{:.1},\"x1\":{:.1},\"y1\":{:.1},\"x2\":{:.1},\"y2\":{:.1},\"secIdx\":{},\"paraIdx\":{},\"controlIdx\":{}}}",
+                            "{{\"type\":\"line\",\"x\":{:.1},\"y\":{:.1},\"w\":{:.1},\"h\":{:.1},\"x1\":{:.1},\"y1\":{:.1},\"x2\":{:.1},\"y2\":{:.1},\"secIdx\":{},\"paraIdx\":{},\"controlIdx\":{}{}{}}}",
                             node.bbox.x, node.bbox.y, node.bbox.width, node.bbox.height,
                             line_node.x1, line_node.y1, line_node.x2, line_node.y2,
-                            si, pi, ci
+                            si, pi, ci, cell_str, outer_table_str
                         ));
                         return;
                     }
@@ -1295,10 +1612,21 @@ impl DocumentCore {
                         ell_node.para_index,
                         ell_node.control_index,
                     ) {
+                        // [Task #1138] 표 셀 안 타원
+                        let cell_str = match (ell_node.cell_index, ell_node.cell_para_index) {
+                            (Some(cei), Some(cpi)) => {
+                                format!(",\"cellIdx\":{},\"cellParaIdx\":{}", cei, cpi)
+                            }
+                            _ => String::new(),
+                        };
+                        let outer_table_str = match ell_node.outer_table_control_index {
+                            Some(otci) => format!(",\"outerTableControlIdx\":{}", otci),
+                            None => String::new(),
+                        };
                         controls.push(format!(
-                            "{{\"type\":\"shape\",\"x\":{:.1},\"y\":{:.1},\"w\":{:.1},\"h\":{:.1},\"secIdx\":{},\"paraIdx\":{},\"controlIdx\":{}}}",
+                            "{{\"type\":\"shape\",\"x\":{:.1},\"y\":{:.1},\"w\":{:.1},\"h\":{:.1},\"secIdx\":{},\"paraIdx\":{},\"controlIdx\":{}{}{}}}",
                             node.bbox.x, node.bbox.y, node.bbox.width, node.bbox.height,
-                            si, pi, ci
+                            si, pi, ci, cell_str, outer_table_str
                         ));
                         return;
                     }
@@ -1309,19 +1637,30 @@ impl DocumentCore {
                         path_node.para_index,
                         path_node.control_index,
                     ) {
+                        // [Task #1138] 표 셀 안 path (다각형/곡선/연결선)
+                        let cell_str = match (path_node.cell_index, path_node.cell_para_index) {
+                            (Some(cei), Some(cpi)) => {
+                                format!(",\"cellIdx\":{},\"cellParaIdx\":{}", cei, cpi)
+                            }
+                            _ => String::new(),
+                        };
+                        let outer_table_str = match path_node.outer_table_control_index {
+                            Some(otci) => format!(",\"outerTableControlIdx\":{}", otci),
+                            None => String::new(),
+                        };
                         if let Some((x1, y1, x2, y2)) = path_node.connector_endpoints {
                             // 연결선: 선 선택 방식 (시작/끝 좌표 포함)
                             controls.push(format!(
-                                "{{\"type\":\"line\",\"x\":{:.1},\"y\":{:.1},\"w\":{:.1},\"h\":{:.1},\"x1\":{:.1},\"y1\":{:.1},\"x2\":{:.1},\"y2\":{:.1},\"secIdx\":{},\"paraIdx\":{},\"controlIdx\":{}}}",
+                                "{{\"type\":\"line\",\"x\":{:.1},\"y\":{:.1},\"w\":{:.1},\"h\":{:.1},\"x1\":{:.1},\"y1\":{:.1},\"x2\":{:.1},\"y2\":{:.1},\"secIdx\":{},\"paraIdx\":{},\"controlIdx\":{}{}{}}}",
                                 node.bbox.x, node.bbox.y, node.bbox.width, node.bbox.height,
                                 x1, y1, x2, y2,
-                                si, pi, ci
+                                si, pi, ci, cell_str, outer_table_str
                             ));
                         } else {
                             controls.push(format!(
-                                "{{\"type\":\"shape\",\"x\":{:.1},\"y\":{:.1},\"w\":{:.1},\"h\":{:.1},\"secIdx\":{},\"paraIdx\":{},\"controlIdx\":{}}}",
+                                "{{\"type\":\"shape\",\"x\":{:.1},\"y\":{:.1},\"w\":{:.1},\"h\":{:.1},\"secIdx\":{},\"paraIdx\":{},\"controlIdx\":{}{}{}}}",
                                 node.bbox.x, node.bbox.y, node.bbox.width, node.bbox.height,
-                                si, pi, ci
+                                si, pi, ci, cell_str, outer_table_str
                             ));
                         }
                         return;
@@ -1566,6 +1905,7 @@ impl DocumentCore {
                 hidden_empty_paras: std::collections::HashSet::new(),
                 endnotes: Vec::new(),
                 endnote_paragraphs: Vec::new(),
+                endnote_para_sources: Vec::new(),
             });
         }
         self.pagination.truncate(sec_count);
@@ -1723,7 +2063,9 @@ impl DocumentCore {
                     self.document.is_hwp3_variant,
                     hwp3_origin_flow_spacing_before,
                     hwp3_origin_page_tolerance,
+                    Some(&section.section_def.endnote_shape),
                     force_breaks.get(idx).unwrap_or(&empty_breaks),
+                    matches!(self.source_format, crate::parser::FileFormat::Hwpx),
                 )
             };
 
@@ -2089,15 +2431,18 @@ impl DocumentCore {
                             p.column_contents.iter().any(|cc| {
                                 cc.items.iter().any(|item| {
                                     let pi = match item {
-                                        PageItem::FullParagraph { para_index } => *para_index,
+                                        PageItem::FullParagraph { para_index } => Some(*para_index),
                                         PageItem::PartialParagraph { para_index, .. } => {
-                                            *para_index
+                                            Some(*para_index)
                                         }
-                                        PageItem::Table { para_index, .. } => *para_index,
-                                        PageItem::PartialTable { para_index, .. } => *para_index,
-                                        PageItem::Shape { para_index, .. } => *para_index,
+                                        PageItem::Table { para_index, .. } => Some(*para_index),
+                                        PageItem::PartialTable { para_index, .. } => {
+                                            Some(*para_index)
+                                        }
+                                        PageItem::Shape { para_index, .. } => Some(*para_index),
+                                        PageItem::EndnoteSeparator { .. } => None,
                                     };
-                                    pi >= hdr_pi
+                                    pi.is_some_and(|pi| pi >= hdr_pi)
                                 })
                             })
                         })
@@ -2113,15 +2458,18 @@ impl DocumentCore {
                             p.column_contents.iter().any(|cc| {
                                 cc.items.iter().any(|item| {
                                     let pi = match item {
-                                        PageItem::FullParagraph { para_index } => *para_index,
+                                        PageItem::FullParagraph { para_index } => Some(*para_index),
                                         PageItem::PartialParagraph { para_index, .. } => {
-                                            *para_index
+                                            Some(*para_index)
                                         }
-                                        PageItem::Table { para_index, .. } => *para_index,
-                                        PageItem::PartialTable { para_index, .. } => *para_index,
-                                        PageItem::Shape { para_index, .. } => *para_index,
+                                        PageItem::Table { para_index, .. } => Some(*para_index),
+                                        PageItem::PartialTable { para_index, .. } => {
+                                            Some(*para_index)
+                                        }
+                                        PageItem::Shape { para_index, .. } => Some(*para_index),
+                                        PageItem::EndnoteSeparator { .. } => None,
                                     };
-                                    pi >= ftr_pi
+                                    pi.is_some_and(|pi| pi >= ftr_pi)
                                 })
                             })
                         })
@@ -2219,6 +2567,7 @@ impl DocumentCore {
                                 PageItem::Table { para_index, .. } => *para_index,
                                 PageItem::PartialTable { para_index, .. } => *para_index,
                                 PageItem::Shape { para_index, .. } => *para_index,
+                                PageItem::EndnoteSeparator { .. } => usize::MAX,
                             };
                             if pi < col_map.len() {
                                 col_map[pi] = ci;
@@ -2519,6 +2868,19 @@ impl DocumentCore {
                                     para_index, control_index, shape_info, vpos_info
                                 ));
                             }
+                            PageItem::EndnoteSeparator {
+                                separator_length,
+                                margin_above,
+                                margin_below,
+                                line_width,
+                                color,
+                                ..
+                            } => {
+                                out.push_str(&format!(
+                                    "    EndnoteSeparator len={} above={} below={} width={} color=#{:06x}\n",
+                                    separator_length, margin_above, margin_below, line_width, color & 0x00ff_ffff
+                                ));
+                            }
                         }
                     }
                 }
@@ -2590,6 +2952,10 @@ impl DocumentCore {
         self.layout_engine.set_hwp3_origin_flow_spacing_before(
             self.document.is_hwp3_variant || self.document.header.version.major == 3,
         );
+        self.layout_engine.set_hwpx_source(matches!(
+            self.source_format,
+            crate::parser::FileFormat::Hwpx
+        ));
         // 활성 필드 정보를 레이아웃 엔진에 전달 (안내문 숨김용)
         self.layout_engine
             .set_active_field(self.active_field.as_ref().map(|af| {
@@ -2726,6 +3092,8 @@ impl DocumentCore {
         if let Some(pr) = self.pagination.get(sec_idx) {
             self.layout_engine
                 .set_hidden_empty_paras(&pr.hidden_empty_paras);
+            self.layout_engine
+                .set_endnote_para_sources(paragraphs.len(), &pr.endnote_para_sources);
         }
 
         // [Task #836] 미주 paragraphs를 본문 paragraphs 뒤에 합쳐서 전달
@@ -2784,6 +3152,10 @@ impl DocumentCore {
                 page_content.page_number,
             );
         }
+        // Task #1154: 동일 bin_data_id Pic 컨트롤이 수직으로 인접 겹쳐 그려질 때
+        // 두 그림의 미세한 세로 스케일 차이로 인한 잔상(이중 라인) 제거.
+        // build 직후 1회만 적용 — 모든 렌더러(SVG/Canvas/Skia/HTML/Layer) 공통.
+        tree.clip_overlapping_same_bin_images();
         Ok(tree)
     }
 
@@ -3350,6 +3722,112 @@ mod tests {
         assert_eq!(core.get_bin_data(0), Some(&[0x01, 0x02, 0x03][..]));
         assert_eq!(core.get_bin_data(1), Some(&[0xAA, 0xBB][..]));
         assert_eq!(core.get_bin_data(2), None);
+    }
+
+    #[test]
+    fn page_border_fill_api_updates_basis_spacing_and_border() {
+        use crate::model::document::{Document, Section, SectionDef};
+        use crate::model::paragraph::Paragraph;
+
+        let mut core = DocumentCore::new_empty();
+        let mut document = Document::default();
+        document.sections.push(Section {
+            section_def: SectionDef::default(),
+            paragraphs: vec![Paragraph::default()],
+            raw_stream: None,
+        });
+        core.set_document(document);
+        core.paginate();
+
+        let result = core
+            .set_page_border_fill_native(
+                0,
+                r##"{"basis":"page","spacingLeft":567,"spacingRight":567,"spacingTop":567,"spacingBottom":567,
+                "borderLeft":{"type":1,"width":1,"color":"#000000"},
+                "borderRight":{"type":1,"width":1,"color":"#000000"},
+                "borderTop":{"type":1,"width":1,"color":"#000000"},
+                "borderBottom":{"type":1,"width":1,"color":"#000000"},
+                "fillType":"solid","fillColor":"#ffffff","patternColor":"#000000","patternType":0,
+                "fillArea":"paper","applyPage":"all"}"##,
+            )
+            .expect("page border fill should update");
+        assert!(result.contains("\"ok\":true"));
+
+        let json = core
+            .get_page_border_fill_native(0)
+            .expect("page border fill should be queryable");
+        assert!(json.contains("\"basis\":\"page\""));
+        assert!(json.contains("\"spacingTop\":567"));
+        assert!(json.contains("\"borderFillId\":"));
+        assert!(json.contains("\"borderTop\":{\"type\":1"));
+
+        let info = core
+            .get_page_info_native(0)
+            .expect("page info should reflect updated page border");
+        assert!(info.contains("\"pageBorderTop\":"));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn page_border_fill_sample_basis_matches_hancom_ui() {
+        use crate::model::page::PageBorderBasis;
+
+        fn json_number(json: &str, key: &str) -> f64 {
+            let needle = format!("\"{}\":", key);
+            let start = json
+                .find(&needle)
+                .unwrap_or_else(|| panic!("{key} missing in {json}"))
+                + needle.len();
+            let end = json[start..]
+                .find(|c| c == ',' || c == '}')
+                .map(|idx| start + idx)
+                .unwrap_or(json.len());
+            json[start..end].trim().parse().unwrap()
+        }
+
+        fn assert_basis(path: &str, expected: &str, expected_render_basis: PageBorderBasis) -> f64 {
+            let data = std::fs::read(path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+            let core =
+                DocumentCore::from_bytes(&data).unwrap_or_else(|e| panic!("load {path}: {e}"));
+            let json = core
+                .get_page_border_fill_native(0)
+                .unwrap_or_else(|e| panic!("query {path}: {e}"));
+            assert!(
+                json.contains(&format!("\"basis\":\"{}\"", expected)),
+                "{path} expected basis={expected}, got {json}"
+            );
+            assert_eq!(
+                core.document.sections[0].section_def.page_border_fill.basis,
+                expected_render_basis
+            );
+            let info = core
+                .get_page_info_native(0)
+                .unwrap_or_else(|e| panic!("page info {path}: {e}"));
+            json_number(&info, "pageBorderTop")
+        }
+
+        let paper_hwp_top =
+            assert_basis("samples/종이기준.hwp", "paper", PageBorderBasis::PaperBased);
+        assert_basis(
+            "samples/종이기준.hwpx",
+            "paper",
+            PageBorderBasis::PaperBased,
+        );
+        let page_hwp_top = assert_basis("samples/쪽기준.hwp", "page", PageBorderBasis::BodyBased);
+        assert_basis("samples/쪽기준.hwpx", "page", PageBorderBasis::BodyBased);
+        let sample16_top = assert_basis(
+            "samples/hwp3-sample16-hwp5.hwp",
+            "page",
+            PageBorderBasis::BodyBased,
+        );
+        assert!(
+            page_hwp_top > paper_hwp_top,
+            "쪽 기준 border top should be inside paper 기준: paper={paper_hwp_top}, page={page_hwp_top}"
+        );
+        assert!(
+            (sample16_top - 49.2).abs() < 0.2,
+            "sample16 page-basis UI should use body top minus spacing and double-line outset: top={sample16_top}"
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]

@@ -254,12 +254,45 @@ impl SkiaTextReplay<'_> {
                             (bbox.x + bbox.width / 2.0) as f32,
                             (bbox.y + bbox.height / 2.0) as f32,
                         );
+                    } else if chars.len() > 1 {
+                        let cx = (bbox.x + bbox.width / 2.0) as f32;
+                        let cy = (bbox.y + bbox.height / 2.0) as f32;
+                        if is_circle {
+                            shape_paint.set_style(paint::Style::Fill);
+                            shape_paint.set_color(fill_color);
+                            if is_reversed {
+                                canvas.draw_circle((cx, cy), box_size / 2.0, &shape_paint);
+                            }
+                            canvas.draw_circle((cx, cy), box_size / 2.0, &stroke_paint);
+                        } else if is_rect {
+                            let rect = Rect::from_xywh(
+                                cx - box_size / 2.0,
+                                cy - box_size / 2.0,
+                                box_size,
+                                box_size,
+                            );
+                            shape_paint.set_style(paint::Style::Fill);
+                            shape_paint.set_color(fill_color);
+                            if is_reversed {
+                                canvas.draw_rect(rect, &shape_paint);
+                            }
+                            canvas.draw_rect(rect, &stroke_paint);
+                        }
+
+                        for ch in chars.iter() {
+                            let display = {
+                                let codepoint = *ch as u32;
+                                if (0x2460..=0x2473).contains(&codepoint) {
+                                    (codepoint - 0x2460 + 1).to_string()
+                                } else if let Some(display) = pua_to_display_text(*ch) {
+                                    display
+                                } else {
+                                    ch.to_string()
+                                }
+                            };
+                            draw_overlap_text(&display, cx, cy);
+                        }
                     } else {
-                        let char_advance = if chars.len() > 1 {
-                            bbox.width as f32 / chars.len() as f32
-                        } else {
-                            box_size
-                        };
                         for (index, ch) in chars.iter().enumerate() {
                             let display = {
                                 let codepoint = *ch as u32;
@@ -273,7 +306,7 @@ impl SkiaTextReplay<'_> {
                             };
                             draw_overlap_box(
                                 &display,
-                                bbox.x as f32 + index as f32 * char_advance + box_size / 2.0,
+                                bbox.x as f32 + index as f32 * box_size + box_size / 2.0,
                                 (bbox.y + bbox.height / 2.0) as f32,
                             );
                         }

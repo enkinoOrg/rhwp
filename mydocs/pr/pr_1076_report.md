@@ -1,96 +1,207 @@
-# PR #1076 처리 보고 — set_field_text_at 메타데이터 불일치
+# PR #1076 재검토 보고 — set_field_text_at 메타데이터 불일치
 
-## 1. 결정
+## 1. 현재 결정
 
-**수정 요청 (거절)** — 한컴 수동 검증에서 버그 잔존 확인.
-PR 코드에 인덱스 의미 불일치 결함.
+**수용 가능 / maintainer 보정 포함.**
+
+컨트리뷰터가 2026-05-27 추가 코멘트로 제시한 `FieldRange` 인덱스 좌표계 설명은
+로컬 코드 확인 결과 타당하다. 이전 보고서의 "FieldRange는 `PARA_HEADER.char_count`
+기준이고 `delete_text_at`은 순수 텍스트 기준이라 서로 불일치한다"는 진단은 철회한다.
+
+다만 PR head에서 생성한 `output/field-01-modified.hwp`는 한컴 에디터에서 파일손상 판정을 받았다.
+rhwp-studio에서는 정상 로드되므로, 한컴이 더 엄격하게 보는 HWP5 record contract 문제가 남아 있었다.
+maintainer 보정 후보에서 Field `CTRL_DATA` 중복을 제거한 뒤 한컴 수동 판정을 통과했다.
 
 | 항목 | 값 |
 |------|-----|
 | 번호 | #1076 |
 | 제목 | fix: set_field_text_at 메타데이터 불일치 — ClickHere 필드 값 설정 시 파일 손상 (#838) |
-| 작성자 | oksure (Hyunwoo Park) — 기존 컨트리뷰터 |
+| 작성자 | oksure (Hyunwoo Park) |
 | base ← head | `devel` ← `contrib/fix-field-text-corruption` |
-| 연결 이슈 | Closes #838 (Bug — **잔존**) |
-| 상태 | **OPEN 유지, 수정 요청** (PR 댓글 게시) |
+| 현재 head | `b214b1fe` |
+| 상태 | PR open, maintainer 보정 포함 수용 가능 |
 
-## 2. 검증 결과
+## 2. 추가 코멘트 검증
 
-### 2.1 자동 검증 (cherry-pick `92846063`)
+컨트리뷰터 주장:
 
-| 항목 | 결과 |
-|------|------|
-| cherry-pick | ✅ 충돌 없음 |
-| `cargo test` | ✅ 1586 passed, 0 failed |
-| `cargo clippy -- -D warnings` | ✅ 0 warnings |
-| `cargo fmt --all -- --check` | ✅ 위반 0건 |
-| WASM 빌드 | ✅ 성공 |
-| CI | ✅ 전부 pass |
-
-자체 검증은 통과 — 그러나 **회귀 가드 테스트 부재**로 한컴
-호환 회귀를 검출하지 못했음.
-
-### 2.2 한컴 수동 검증 — **실패**
-
-작업지시자 시나리오 (`samples/field-01.hwp` → 필드 2개 값 설정 →
-저장 → `saved/111field-01.hwp`):
-
-1. 한컴 오피스에서 "파일 손상" 경고 (#838 증상 잔존)
-2. 한컴 렌더: 첫 필드 직후 모든 내용 출력 안 됨
-3. rhwp-studio: 입력값 옆에 필드 플레이스홀더(안내문) 병기
-
-## 3. 결함 진단 (확정)
-
-`saved/111field-01.hwp` IR 비교 (문단 0.7 "회사명" 필드):
-
-| 항목 | 원본 | 손상본 |
-|------|------|--------|
-| char_count | 38 | **45** (+7) |
-| text_len | 7 | **14** (+7) |
-| 텍스트 | `"회사명\t\t: "` | `"회사명\t\t: 첫회사명 필드"` |
-
-→ **안내문 미삭제 + 입력값 텍스트 끝에 추가**.
-
-### Root cause — 인덱스 의미 불일치
-
-PR 코드 (`field_query.rs:337-348`):
-```rust
-let start_idx = fr.start_char_idx;            // = 7 (char_count 기준)
-let count = fr.end_char_idx - fr.start_char_idx;
-para.delete_text_at(start_idx, count);
-para.insert_text_at(start_idx, value);
+```text
+FieldRange.start_char_idx/end_char_idx는 para.text.chars()와 같은 좌표계다.
+FIELD_BEGIN/FIELD_END 같은 확장 컨트롤은 parse_para_text의 local char_count를 증가시키지 않는다.
 ```
 
-- `FieldRange.start_char_idx` / `end_char_idx`: **문단 char_count
-  기준** offset (FIELD_BEGIN/END 컨트롤 문자 포함, 값=7)
-- `delete_text_at(char_offset, count)` (`paragraph.rs:382`):
-  `self.text.chars().collect()` 후 인덱싱 → **순수 텍스트 char
-  offset** (컨트롤 제외)
+로컬 확인:
 
-두 인덱스 의미가 다른데 변환 없이 그대로 전달 →
-`start_idx=7 >= text_len=7` 가드에 걸려 **0건 삭제 후 return**.
-`insert_text_at(7, value)` 가 텍스트 끝에 추가 → 안내문 + 입력값
-병기 + 메타데이터 불일치 → 한컴 파일 손상.
+`src/parser/body_text.rs`의 `parse_para_text`는 다음처럼 동작한다.
 
-PR 본문 주장 "delete_text_at + insert_text_at 가 모든 메타데이터
-시프트" 는 사실. **그러나 인덱스 변환을 누락한 것이 결함**.
+```text
+FIELD_BEGIN(0x0003): field_stack.push((char_count, ctrl_idx)); ctrl_idx += 1
+FIELD_END(0x0004): field_ranges.push(start_char_idx, end_char_idx=char_count)
+일반 텍스트/탭/개행: text.push(); char_count += 1
+확장 컨트롤: pos += 16, char_count 미증가
+```
 
-## 4. 처리
+따라서 `FieldRange.start_char_idx/end_char_idx`는 HWP `PARA_HEADER.char_count`
+좌표가 아니라 `para.text.chars()` 기준 문자 인덱스다.
 
-- **PR #1076 OPEN 유지** — 작성자에게 수정 요청 댓글 게시
-  (https://github.com/edwardkim/rhwp/pull/1076#issuecomment-4524325367)
-- cherry-pick 브랜치 `pr1076-cherry` 삭제
-- 이슈 #838 OPEN 유지 (PR 재푸시 시 재검토)
-- Vite dev server 종료, 환경 정리 완료
-- **자매 PR #1080** (`set_cell_field_text` 같은 패턴) 도 동일
-  결함 가능성 → 별도 검토 시 동일 인덱스 변환 점검 필수
+## 3. PR head 검증
 
-## 5. 후속 권고
+검증 브랜치:
 
-- 작성자가 `FieldRange` char_count 기준 offset → 순수 텍스트
-  char offset 변환 추가 (`para.char_offsets` 활용 또는 컨트롤
-  문자 카운팅) 후 재푸시
-- 회귀 가드 단위 테스트 (이슈 #838 재현 시나리오: 안내문 있는
-  ClickHere + setFieldValue → 저장 → 메타데이터 정합 검증) 추가
-  부탁
-- PR #1080 도 같은 결함 가능성 → 작성자가 함께 확인하도록 안내됨
+```text
+local/pr1076-review
+```
+
+실행:
+
+```text
+cargo test set_field_value_removes_guide_text
+cargo test diag_issue838_save_and_inspect -- --nocapture
+cargo test test_issue838_two_field_setvalue_roundtrip -- --nocapture
+```
+
+결과:
+
+```text
+set_field_value_removes_guide_text: pass
+diag_issue838_save_and_inspect: pass
+test_issue838_two_field_setvalue_roundtrip: pass
+```
+
+진단 테스트 산출물:
+
+```text
+output/field-01-modified.hwp
+```
+
+작업지시자 판정:
+
+```text
+한컴 에디터: 파일손상
+rhwp-studio: 정상
+```
+
+## 4. 한컴 파일손상 원인
+
+`hwp5-ctrl-data-trace`로 정답지와 PR head 산출물을 비교했다.
+
+```text
+output/poc/pr1076-field/ctrl_data_trace.md
+```
+
+핵심 차이:
+
+| side | CTRL_DATA records | total bytes |
+|---|---:|---:|
+| oracle `samples/field-01.hwp` | 11 | 198 |
+| PR head generated `output/field-01-modified.hwp` | 16 | 290 |
+
+PR head generated 파일은 Section0의 ClickHere Field `CTRL_HEADER` 아래에 같은 `CTRL_DATA`를 두 번 쓴다.
+
+예:
+
+```text
+BodyText/Section0/PARA_HEADER#33/CTRL_HEADER#37/CTRL_DATA#38
+BodyText/Section0/PARA_HEADER#33/CTRL_HEADER#37/CTRL_DATA#39
+```
+
+원인:
+
+```text
+1. Paragraph.ctrl_data_records에 보존된 원본 CTRL_DATA를 serialize_control() 마지막에서 복원
+2. Control::Field 직렬화가 field.ctrl_data_name으로 CTRL_DATA를 다시 합성
+```
+
+rhwp-studio는 중복 `CTRL_DATA`를 관대하게 읽지만, 한컴 에디터는 Field control의 자식 record contract
+위반으로 보고 파일손상 판정을 내리는 것으로 해석한다.
+
+## 5. maintainer 보정 후보
+
+Field 직렬화에서 원본 `ctrl_data_record`가 이미 전달된 경우에는 `field.ctrl_data_name` 기반
+합성 `CTRL_DATA`를 추가하지 않도록 조정했다.
+
+```text
+src/serializer/control.rs
+  - ClickHere Field CTRL_DATA 합성 조건에 ctrl_data_record.is_none() 추가
+```
+
+함께 정리한 항목:
+
+```text
+src/document_core/queries/field_query.rs
+  - field_range_index 재조회 실패를 InvalidField 에러로 명시
+  - rebuild_char_offsets 주석 정확화
+
+src/wasm_api/tests.rs
+  - output 파일 생성용 진단 테스트 제거
+
+tests/issue_838_field_set_value.rs
+  - DocumentCore 기반 회귀 테스트 2개로 정리
+  - RHWP_ISSUE838_OUT 지정 시 한컴 판정용 파일 생성 가능
+```
+
+## 6. maintainer 후보 검증
+
+실행:
+
+```text
+cargo fmt --all -- --check
+cargo test --test issue_838_field_set_value
+RHWP_ISSUE838_OUT=output/poc/pr1076-field/field-01-modified-candidate.hwp \
+  cargo test --test issue_838_field_set_value \
+  set_field_value_roundtrips_two_empty_click_here_fields -- --nocapture
+target/debug/rhwp hwp5-ctrl-data-trace \
+  samples/field-01.hwp \
+  output/poc/pr1076-field/field-01-modified-candidate.hwp \
+  --out output/poc/pr1076-field/ctrl_data_trace_candidate.md
+```
+
+결과:
+
+```text
+fmt: pass
+issue_838_field_set_value: 2 passed
+candidate generation: pass
+```
+
+후보 파일의 CTRL_DATA 비교:
+
+| side | CTRL_DATA records | total bytes |
+|---|---:|---:|
+| oracle `samples/field-01.hwp` | 11 | 198 |
+| candidate `field-01-modified-candidate.hwp` | 11 | 198 |
+
+후보 파일에서는 PR head 산출물에 있던 Field `CTRL_DATA` 중복이 제거되었다.
+
+## 7. 한컴 판정 게이트
+
+현재 필요한 수동 확인 파일:
+
+```text
+output/poc/pr1076-field/field-01-modified-candidate.hwp
+```
+
+작업지시자 판정 항목:
+
+| file | 한컴 열기 | 파일손상 | 첫 필드 이후 출력 | 필드 값 표시 | 비고 |
+|---|---|---|---|---|---|
+| `output/poc/pr1076-field/field-01-modified-candidate.hwp` | 성공 | 없음 | 성공 | 성공 | maintainer 보정 후보 |
+
+한컴에서 정상 판정이면 PR #1076은 컨트리뷰터 변경 위에 maintainer 보정 커밋을 얹어 수용하는 방향이 적절하다.
+
+## 8. 최종 결론
+
+```text
+2026-05-27 maintainer 수동 판정 통과
+2026-05-27 한컴2020 편집기 정상 동작 확인
+```
+
+PR #1076의 핵심 방향은 타당하다. 단, PR head 그대로는 Field `CTRL_DATA` 중복으로 한컴 파일손상이 발생하므로
+다음 보정까지 함께 반영한다.
+
+```text
+1. set_field_text_at은 para.text 직접 교체 대신 delete_text_at/insert_text_at 위임 유지
+2. FieldRange 갱신 후 char_offsets 재생성 유지
+3. Field CTRL_DATA는 원본 ctrl_data_record가 있을 때 중복 합성하지 않음
+4. wasm_api의 산출물 생성용 진단 테스트는 제거하고 integration 회귀 테스트로 유지
+```

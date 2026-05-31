@@ -305,6 +305,7 @@ impl LayoutEngine {
                     control_index: Some(control_index),
                     cell_index: None,
                     cell_para_index: None,
+                    note_ref: None,
                 }),
                 BoundingBox::new(eq_x, eq_y, eq_w, eq_h),
             );
@@ -458,6 +459,7 @@ impl LayoutEngine {
             bin_data_content,
             overflow_map,
             &[],
+            None, // [Task #1138] 본문 도형 — 셀 정보 없음
         );
 
         // 캡션 렌더링
@@ -699,6 +701,7 @@ impl LayoutEngine {
                     bin_data_content,
                     &empty_map,
                     parent_cell_path,
+                    None, // [Task #1138] TODO: layout_group_child_affine 에 cell ctx propagate (별도 후속)
                 );
             }
         }
@@ -724,11 +727,18 @@ impl LayoutEngine {
         bin_data_content: &[BinDataContent],
         overflow_map: &std::collections::HashMap<(usize, usize), Vec<Paragraph>>,
         parent_cell_path: &[CellPathEntry],
+        // [Task #1138] 표 셀 내 도형인 경우: (cell_idx, cell_para_idx, outer_table_ctrl_idx)
+        table_cell_ref: Option<(usize, usize, usize)>,
     ) {
         use crate::model::shape::ShapeObject;
 
         // 공통: 회전/대칭 정보 추출
         let transform = extract_shape_transform(shape.shape_attr());
+
+        // [Task #1138] 표 셀 내 도형 식별을 위한 cell 정보 추출 (helper)
+        let cell_index = table_cell_ref.map(|(ci, _, _)| ci);
+        let cell_para_index = table_cell_ref.map(|(_, cpi, _)| cpi);
+        let outer_table_control_index = table_cell_ref.map(|(_, _, otci)| otci);
 
         // 회전/대칭이 있으면 current 크기로 중앙 배치
         // 그렇지 않으면 호출자가 전달한 w, h를 그대로 사용
@@ -764,6 +774,9 @@ impl LayoutEngine {
                         para_index: Some(para_index),
                         control_index: Some(control_index),
                         transform,
+                        cell_index,
+                        cell_para_index,
+                        outer_table_control_index,
                         ..RectangleNode::new(round_px, style, gradient)
                     }),
                     BoundingBox::new(render_x, render_y, render_w, render_h),
@@ -931,6 +944,9 @@ impl LayoutEngine {
                         path_node.para_index = Some(para_index);
                         path_node.control_index = Some(control_index);
                         path_node.transform = transform;
+                        path_node.cell_index = cell_index;
+                        path_node.cell_para_index = cell_para_index;
+                        path_node.outer_table_control_index = outer_table_control_index;
                         // 연결선: 시작/끝 좌표 (선 선택 방식용) + 화살표
                         path_node.connector_endpoints = Some((conn_x1, conn_y1, conn_x2, conn_y2));
                         if line_style.start_arrow != super::super::ArrowStyle::None
@@ -975,6 +991,9 @@ impl LayoutEngine {
                         line_node.para_index = Some(para_index);
                         line_node.control_index = Some(control_index);
                         line_node.transform = transform;
+                        line_node.cell_index = cell_index;
+                        line_node.cell_para_index = cell_para_index;
+                        line_node.outer_table_control_index = outer_table_control_index;
                         let node = RenderNode::new(
                             node_id,
                             RenderNodeType::Line(line_node),
@@ -995,6 +1014,9 @@ impl LayoutEngine {
                     line_node.para_index = Some(para_index);
                     line_node.control_index = Some(control_index);
                     line_node.transform = transform;
+                    line_node.cell_index = cell_index;
+                    line_node.cell_para_index = cell_para_index;
+                    line_node.outer_table_control_index = outer_table_control_index;
                     let node = RenderNode::new(
                         node_id,
                         RenderNodeType::Line(line_node),
@@ -1011,6 +1033,9 @@ impl LayoutEngine {
                 ell_node.para_index = Some(para_index);
                 ell_node.control_index = Some(control_index);
                 ell_node.transform = transform;
+                ell_node.cell_index = cell_index;
+                ell_node.cell_para_index = cell_para_index;
+                ell_node.outer_table_control_index = outer_table_control_index;
                 let mut node = RenderNode::new(
                     node_id,
                     RenderNodeType::Ellipse(ell_node),
@@ -1138,6 +1163,9 @@ impl LayoutEngine {
                 path_node.para_index = Some(para_index);
                 path_node.control_index = Some(control_index);
                 path_node.transform = transform;
+                path_node.cell_index = cell_index;
+                path_node.cell_para_index = cell_para_index;
+                path_node.outer_table_control_index = outer_table_control_index;
                 let node = RenderNode::new(
                     node_id,
                     RenderNodeType::Path(path_node),
@@ -1183,6 +1211,9 @@ impl LayoutEngine {
                 path_node.para_index = Some(para_index);
                 path_node.control_index = Some(control_index);
                 path_node.transform = transform;
+                path_node.cell_index = cell_index;
+                path_node.cell_para_index = cell_para_index;
+                path_node.outer_table_control_index = outer_table_control_index;
                 let mut node = RenderNode::new(
                     node_id,
                     RenderNodeType::Path(path_node),
@@ -1239,6 +1270,9 @@ impl LayoutEngine {
                 path_node.para_index = Some(para_index);
                 path_node.control_index = Some(control_index);
                 path_node.transform = transform;
+                path_node.cell_index = cell_index;
+                path_node.cell_para_index = cell_para_index;
+                path_node.outer_table_control_index = outer_table_control_index;
                 let mut node = RenderNode::new(
                     node_id,
                     RenderNodeType::Path(path_node),
@@ -1347,6 +1381,7 @@ impl LayoutEngine {
                             bin_data_content,
                             &empty_map,
                             parent_cell_path,
+                            table_cell_ref, // [Task #1138] 그룹 자식 — 부모와 같은 셀 컨텍스트
                         );
                     }
                 }
@@ -1366,6 +1401,7 @@ impl LayoutEngine {
                         brightness: pic.image_attr.brightness,
                         contrast: pic.image_attr.contrast,
                         text_wrap: Some(pic.common.text_wrap),
+                        external_path: pic.image_attr.external_path.clone(),
                         ..ImageNode::new(bin_data_id, image_data)
                     }),
                     BoundingBox::new(render_x, render_y, render_w, render_h),
@@ -1568,6 +1604,14 @@ impl LayoutEngine {
                     RenderNodeType::Image(ImageNode {
                         fill_mode: Some(img_fill.fill_mode),
                         original_size,
+                        brightness: img_fill.brightness,
+                        contrast: img_fill.contrast,
+                        effect: match img_fill.effect {
+                            1 => crate::model::image::ImageEffect::GrayScale,
+                            2 => crate::model::image::ImageEffect::BlackWhite,
+                            3 => crate::model::image::ImageEffect::Pattern8x8,
+                            _ => crate::model::image::ImageEffect::RealPic,
+                        },
                         ..ImageNode::new(bin_data_id, image_data)
                     }),
                     BoundingBox::new(base_x, base_y, w, h),
@@ -1614,6 +1658,16 @@ impl LayoutEngine {
             width: (w - margin_left - margin_right).max(0.0),
             height: (h - margin_top - margin_bottom).max(0.0),
         };
+        let mut textbox_node = RenderNode::new(
+            tree.next_id(),
+            RenderNodeType::TextBox,
+            BoundingBox::new(
+                inner_area.x,
+                inner_area.y,
+                inner_area.width,
+                inner_area.height,
+            ),
+        );
 
         // [Task #874 #3 / #930] shortcut.hwp 1 페이지 우측하단 자동번호 "1" 시각 정합:
         // 도형이 원본 (sa.original_*) 대비 확대된 마스터 페이지 글상자는 한컴이 내부
@@ -1678,7 +1732,7 @@ impl LayoutEngine {
                 // 세로쓰기 오버플로우 수신: 오버플로우 문단을 세로 레이아웃으로 렌더링
                 self.layout_vertical_textbox_text_with_paras(
                     tree,
-                    shape_node,
+                    &mut textbox_node,
                     overflow_paras,
                     text_box,
                     styles,
@@ -1722,7 +1776,7 @@ impl LayoutEngine {
                     let is_last_para = tb_para_idx + 1 == composed_paras.len();
                     para_y = self.layout_composed_paragraph(
                         tree,
-                        shape_node,
+                        &mut textbox_node,
                         composed,
                         styles,
                         &para_col_area,
@@ -1732,6 +1786,7 @@ impl LayoutEngine {
                         section_index,
                         tb_para_idx,
                         Some(cell_ctx),
+                        true,
                         is_last_para,
                         0.0,
                         None,
@@ -1740,6 +1795,9 @@ impl LayoutEngine {
                         None, // 도형 컨텍스트 — wrap zone 무관
                     );
                 }
+            }
+            if !textbox_node.children.is_empty() {
+                shape_node.children.push(textbox_node);
             }
             return;
         }
@@ -1781,7 +1839,7 @@ impl LayoutEngine {
         if text_direction != 0 {
             self.layout_vertical_textbox_text_with_paras(
                 tree,
-                shape_node,
+                &mut textbox_node,
                 &text_box.paragraphs[..para_count],
                 text_box,
                 styles,
@@ -1792,6 +1850,9 @@ impl LayoutEngine {
                 control_index,
                 parent_cell_path,
             );
+            if !textbox_node.children.is_empty() {
+                shape_node.children.push(textbox_node);
+            }
             return;
         }
 
@@ -1915,7 +1976,7 @@ impl LayoutEngine {
             let is_last_para = tb_para_idx + 1 == composed_paras.len();
             para_y = self.layout_composed_paragraph(
                 tree,
-                shape_node,
+                &mut textbox_node,
                 composed,
                 styles,
                 &para_col_area,
@@ -1925,6 +1986,7 @@ impl LayoutEngine {
                 section_index,
                 tb_para_idx,
                 Some(cell_ctx),
+                true,
                 is_last_para,
                 tb_inline_width,
                 None,
@@ -2102,7 +2164,7 @@ impl LayoutEngine {
                         let empty_map = std::collections::HashMap::new();
                         self.layout_shape_object(
                             tree,
-                            shape_node,
+                            &mut textbox_node,
                             shape.as_ref(),
                             child_x,
                             child_y,
@@ -2115,6 +2177,7 @@ impl LayoutEngine {
                             bin_data_content,
                             &empty_map,
                             &nested_parent_path,
+                            None, // [Task #1138] TODO: layout_textbox_content 에 cell ctx propagate (별도 후속)
                         );
                     }
                     Control::Picture(pic) => {
@@ -2136,16 +2199,19 @@ impl LayoutEngine {
                                 width: clamped_w,
                                 height: clamped_h,
                             };
+                            // [Task #1151 v4] 글상자 내부 picture (inline) — section/para/control
+                            // 전달하여 findPictureAtClick 의 secIdx undefined skip 차단.
                             self.layout_picture(
                                 tree,
-                                shape_node,
+                                &mut textbox_node,
                                 pic,
                                 &pic_container,
                                 bin_data_content,
                                 Alignment::Left,
-                                None,
-                                None,
-                                None,
+                                Some(section_index),
+                                Some(para_index),
+                                Some(ctrl_idx_in_para),
+                                None, // 글상자 내부는 cell_ctx 미적용 (TODO: 셀 안 글상자는 후속)
                             );
                             inline_x += clamped_w;
                         } else {
@@ -2156,15 +2222,17 @@ impl LayoutEngine {
                                 width: inner_area.width,
                                 height: (inner_area.height - (inline_y - inner_area.y)).max(0.0),
                             };
+                            // [Task #1151 v4] 글상자 내부 picture (absolute) — section/para/control 전달.
                             self.layout_picture(
                                 tree,
-                                shape_node,
+                                &mut textbox_node,
                                 pic,
                                 &pic_container,
                                 bin_data_content,
                                 para_alignment,
-                                None,
-                                None,
+                                Some(section_index),
+                                Some(para_index),
+                                Some(ctrl_idx_in_para),
                                 None,
                             );
                             let pic_h = hwpunit_to_px(pic.common.height as i32, self.dpi);
@@ -2241,10 +2309,11 @@ impl LayoutEngine {
                                     control_index: Some(ctrl_idx_in_para),
                                     cell_index: None,
                                     cell_para_index: None,
+                                    note_ref: None,
                                 }),
                                 BoundingBox::new(eq_x, eq_y, eq_w, eq_h),
                             );
-                            shape_node.children.push(eq_node);
+                            textbox_node.children.push(eq_node);
                         }
                     }
                     Control::Table(table) => {
@@ -2265,7 +2334,7 @@ impl LayoutEngine {
                             .unwrap_or(Alignment::Left);
                         inline_y = self.layout_embedded_table(
                             tree,
-                            shape_node,
+                            &mut textbox_node,
                             table,
                             styles,
                             &inner_area,
@@ -2287,6 +2356,9 @@ impl LayoutEngine {
             if max_inline_height > 0.0 {
                 inline_y += max_inline_height;
             }
+        }
+        if !textbox_node.children.is_empty() {
+            shape_node.children.push(textbox_node);
         }
     }
 

@@ -10,7 +10,7 @@
  * 레이아웃: 좌측(탭+컨텐츠) + 우측(버튼) 패턴
  * CSS 접두어: pp-
  */
-import type { PictureProperties, ShapeProperties } from '@/core/types';
+import type { PictureProperties, ShapeProperties, CellPath } from '@/core/types';
 import type { WasmBridge } from '@/core/wasm-bridge';
 import type { EventBus } from '@/core/event-bus';
 
@@ -66,9 +66,13 @@ export class PicturePropsDialog {
   private sec = 0;
   private para = 0;
   private ci = 0;
-  private objectType: 'image' | 'shape' | 'line' = 'image';
+  private objectType: 'image' | 'shape' | 'line' | 'group' = 'image';
   /** [Task #825] 머리말/꼬리말 그림 marker (Some 일 때 신규 API 사용). */
   private headerFooter: { kind: 'header' | 'footer'; outerParaIdx: number; outerControlIdx: number } | undefined;
+  /** [Task #1138] 표 셀 내 객체 marker (Some 일 때 by_path API 사용). */
+  private cellPath: CellPath | undefined;
+  /** [Task #1138] 셀 paragraph 내 picture/shape control 인덱스 (cellPath 동반). */
+  private innerControlIdx = 0;
   private props: PictureProperties | null = null;
   private shapeProps: ShapeProperties | null = null;
 
@@ -220,8 +224,10 @@ export class PicturePropsDialog {
     sec: number,
     para: number,
     ci: number,
-    type: 'image' | 'shape' | 'line' = 'image',
+    type: 'image' | 'shape' | 'line' | 'group' = 'image',
     headerFooter?: { kind: 'header' | 'footer'; outerParaIdx: number; outerControlIdx: number },
+    cellPath?: CellPath,
+    innerControlIdx?: number,
   ): void {
     this.build();
     this.sec = sec;
@@ -229,18 +235,32 @@ export class PicturePropsDialog {
     this.ci = ci;
     this.objectType = type;
     this.headerFooter = headerFooter;
+    // [Task #1138] cellPath 가 있으면 표 셀 내부 객체 — by_path API 사용.
+    this.cellPath = cellPath;
+    this.innerControlIdx = innerControlIdx ?? 0;
 
-    if (type === 'shape' || type === 'line') {
-      this.shapeProps = this.wasm.getShapeProperties(sec, para, ci);
+    // getter 분기:
+    // - shape/line/group: cellPath > 외부 (셀 안 도형은 by_path API)
+    // - picture: headerFooter > cellPath > 외부
+    //   [Task #1151 v4] 셀 안 inline picture 는 getCellPicturePropertiesByPath
+    //   wasm API 호출.
+    if (type === 'shape' || type === 'line' || type === 'group') {
+      if (cellPath) {
+        this.shapeProps = this.wasm.getCellShapePropertiesByPath(sec, para, cellPath, this.innerControlIdx);
+      } else {
+        this.shapeProps = this.wasm.getShapeProperties(sec, para, ci);
+      }
       this.props = this.shapeProps as unknown as PictureProperties;
     } else {
       this.shapeProps = null;
-      // [Task #825] 머리말/꼬리말 그림은 별도 API 사용 — outer (Header/Footer 컨트롤)
-      // 위치 + inner (그림) 위치 5-tuple lookup.
       if (headerFooter) {
+        // [Task #825] 머리말/꼬리말 그림 — 별도 5-tuple API
         this.props = this.wasm.getHeaderFooterPictureProperties(
           sec, headerFooter.outerParaIdx, headerFooter.outerControlIdx, para, ci,
         );
+      } else if (cellPath) {
+        // [Task #1151 v4] 셀 안 inline picture — by_path API 호출.
+        this.props = this.wasm.getCellPicturePropertiesByPath(sec, para, cellPath, this.innerControlIdx);
       } else {
         this.props = this.wasm.getPictureProperties(sec, para, ci);
       }
@@ -346,7 +366,7 @@ export class PicturePropsDialog {
     this.panels = [];
 
     const tabNames = this.objectType === 'line' ? LINE_TAB_NAMES
-      : this.objectType === 'shape' ? SHAPE_TAB_NAMES
+      : (this.objectType === 'shape' || this.objectType === 'group') ? SHAPE_TAB_NAMES
       : PICTURE_TAB_NAMES;
     tabNames.forEach((name, i) => {
       const btn = document.createElement('button');
@@ -471,8 +491,13 @@ export class PicturePropsDialog {
     const hPosRow = this.row();
     hPosRow.classList.add('pp-pos-detail');
     hPosRow.appendChild(this.label('가로(I):'));
+    // [Task #1151 v8 결함 B] Para 옵션 추가. horz_rel_to 의 valid 값은
+    // Paper/Page/Column/Para 4 개 (스펙 pack_common_attr_bits 의 horz_rel_to_to_bits).
+    // 이전: ['Paper', '종이'], ['Page', '쪽'], ['Column', '단'] 만 → picture.common.horz_rel_to
+    // = Para 시 select 매칭 실패 → "select 없음" 표시. 사용자 한컴 native 시연 시
+    // 글자처럼 해제 후 가로 기준이 "문단" 으로 표시되어야 정합 (한컴 동작).
     this.horzRelSelect = this.selectEl([
-      ['Paper', '종이'], ['Page', '쪽'], ['Column', '단'],
+      ['Paper', '종이'], ['Page', '쪽'], ['Column', '단'], ['Para', '문단'],
     ]);
     hPosRow.appendChild(this.horzRelSelect);
     hPosRow.appendChild(this.unit('의'));
@@ -492,7 +517,7 @@ export class PicturePropsDialog {
     vPosRow.classList.add('pp-pos-detail');
     vPosRow.appendChild(this.label('세로(V):'));
     this.vertRelSelect = this.selectEl([
-      ['Paper', '종이'], ['Page', '쪽'], ['Paragraph', '문단'],
+      ['Paper', '종이'], ['Page', '쪽'], ['Para', '문단'],
     ]);
     vPosRow.appendChild(this.vertRelSelect);
     vPosRow.appendChild(this.unit('의'));
@@ -1898,7 +1923,7 @@ export class PicturePropsDialog {
     if (desc !== this.props.description) updated['description'] = desc;
 
     // Shape(글상자) 전용 속성
-    if ((this.objectType === 'shape' || this.objectType === 'line') && this.shapeProps) {
+    if ((this.objectType === 'shape' || this.objectType === 'line' || this.objectType === 'group') && this.shapeProps) {
       // 글상자 여백
       const ml = mmToHwp(parseFloat(this.tbMarginLeftInput?.value) || 0);
       const mr = mmToHwp(parseFloat(this.tbMarginRightInput?.value) || 0);
@@ -2136,8 +2161,19 @@ export class PicturePropsDialog {
     }
 
     if (Object.keys(updated).length > 0) {
-      if (this.objectType === 'shape' || this.objectType === 'line') {
-        this.wasm.setShapeProperties(this.sec, this.para, this.ci, updated);
+      // setter 분기:
+      // - shape/line/group: cellPath > 외부
+      // - picture: headerFooter > cellPath > 외부
+      //   [Task #1151 v4] 셀 안 inline picture 는 setCellPicturePropertiesByPath
+      //   wasm API 호출. 본문 picture (cellPath 없음) 는 기존 setPictureProperties.
+      if (this.objectType === 'shape' || this.objectType === 'line' || this.objectType === 'group') {
+        if (this.cellPath) {
+          this.wasm.setCellShapePropertiesByPath(
+            this.sec, this.para, this.cellPath, this.innerControlIdx, updated,
+          );
+        } else {
+          this.wasm.setShapeProperties(this.sec, this.para, this.ci, updated);
+        }
       } else if (this.headerFooter) {
         // [Task #825] 머리말/꼬리말 그림은 별도 API — 5-tuple lookup. 캡션 신규
         // 생성은 미지원 (set_header_footer_picture_properties_native 가 NotSupported
@@ -2145,6 +2181,11 @@ export class PicturePropsDialog {
         this.wasm.setHeaderFooterPictureProperties(
           this.sec, this.headerFooter.outerParaIdx, this.headerFooter.outerControlIdx,
           this.para, this.ci, updated,
+        );
+      } else if (this.cellPath) {
+        // [Task #1151 v4] 셀 안 inline picture — by_path API 호출.
+        this.wasm.setCellPicturePropertiesByPath(
+          this.sec, this.para, this.cellPath, this.innerControlIdx, updated,
         );
       } else {
         this.wasm.setPictureProperties(this.sec, this.para, this.ci, updated);
@@ -2190,7 +2231,7 @@ export class PicturePropsDialog {
     this.updatePositionVisibility();
 
     // Shape/Line 전용 필드
-    if ((this.objectType === 'shape' || this.objectType === 'line') && this.shapeProps) {
+    if ((this.objectType === 'shape' || this.objectType === 'line' || this.objectType === 'group') && this.shapeProps) {
       const sp = this.shapeProps;
 
       // 기본 탭 — 회전/대칭
@@ -2518,6 +2559,9 @@ export class PicturePropsDialog {
       const rect = this.dialog.getBoundingClientRect();
       offsetX = e.clientX - rect.left;
       offsetY = e.clientY - rect.top;
+      this.dialog.style.position = 'fixed';
+      this.dialog.style.left = `${rect.left}px`;
+      this.dialog.style.top = `${rect.top}px`;
       e.preventDefault();
     });
     document.addEventListener('mousemove', (e) => {

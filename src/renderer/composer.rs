@@ -1568,6 +1568,16 @@ pub fn decode_pua_overlap_number(chars: &[char]) -> Option<String> {
     Some(s)
 }
 
+/// CharOverlap controls occupy one text-flow position even when their payload
+/// contains multiple glyph components.
+///
+/// Hancom uses this for overlapped two-digit markers such as the boxed 10/11/12
+/// in `table-vpos-01.hwp`: the control stores two PUA glyph components, but
+/// caret movement and line measurement advance by one character box.
+pub fn char_overlap_advance_units(chars: &[char]) -> usize {
+    usize::from(!chars.is_empty())
+}
+
 fn pua_enclosed_border_type(ch: char) -> Option<u8> {
     let cp = ch as u32;
     // U+F02B1~F02C4 (①~⑳): map_pua_bullet_char 에서 표준 원문자로 매핑 — CharOverlap 제외

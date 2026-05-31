@@ -715,7 +715,12 @@ fn materialize_master_page_autonum_placeholder(
     report: &mut AdapterReport,
     context: ParagraphContext,
 ) {
-    if context != ParagraphContext::MasterPage {
+    // [Task #1113] 바탕쪽(MasterPage) 뿐 아니라 머리말/꼬리말(HeaderFooter) 글상자
+    // 안의 AutoNumber-only 페이지번호 문단도 동일하게 처리한다.
+    if !matches!(
+        context,
+        ParagraphContext::MasterPage | ParagraphContext::HeaderFooter
+    ) {
         return;
     }
 
@@ -727,10 +732,15 @@ fn materialize_master_page_autonum_placeholder(
         return;
     }
 
-    // HWPX emits an empty <hp:t/> after master-page PAGE AutoNumber controls.
-    // The generic HWPX parser materializes the AutoNumber placeholder as a
-    // visible space, but Hancom's HWPX->HWP save stores the master-page page
-    // number paragraph as AutoNumber-only: no leading U+0020 before the control.
+    // HWPX emits an empty <hp:t/> after PAGE AutoNumber controls. The generic
+    // HWPX parser synthesizes a visible placeholder space (U+0020) for the
+    // AutoNumber, but Hancom's HWPX->HWP save stores the page-number paragraph
+    // as AutoNumber-only: no leading U+0020 before the control.
+    //
+    // [Task #1113] 머리말 홀수쪽 글상자(폭 4252)에서 이 잉여 U+0020 이 한컴
+    // 에디터의 페이지번호 줄나눔/글상자 높이 증가를 유발. 정답지처럼
+    // AutoNumber-only 로 정규화한다. (짝수쪽은 fwSpace+텍스트+autoNum 이라
+    // `text != " "` 에서 자동 제외 → 회귀 없음)
     para.text.clear();
     para.char_offsets.clear();
     para.char_count = 9;

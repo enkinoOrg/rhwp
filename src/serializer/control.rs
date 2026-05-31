@@ -141,7 +141,7 @@ pub fn serialize_control(
             //   12..   UTF-16 LE 필드 이름 (예: "myMsg01")
             //
             // ctrl_data_name (HWPX `<hp:fieldBegin name="...">`) 우선, 비어있으면 생성 안 함.
-            if matches!(f.field_type, FieldType::ClickHere) {
+            if matches!(f.field_type, FieldType::ClickHere) && ctrl_data_record.is_none() {
                 if let Some(name) = &f.ctrl_data_name {
                     if !name.is_empty() {
                         let name_utf16: Vec<u16> = name.encode_utf16().collect();
@@ -229,8 +229,8 @@ fn serialize_section_def(sd: &SectionDef, level: u16, records: &mut Vec<Record>)
     let mut w = ByteWriter::new();
     w.write_u32(sd.flags).unwrap();
     w.write_i16(sd.column_spacing).unwrap();
-    w.write_u16(0).unwrap(); // vertical_align
-    w.write_u16(0).unwrap(); // horizontal_align
+    w.write_i16(sd.line_grid).unwrap();
+    w.write_i16(sd.char_grid).unwrap();
     w.write_u32(sd.default_tab_spacing).unwrap();
     w.write_u16(sd.outline_numbering_id).unwrap();
     w.write_u16(sd.page_num).unwrap();
@@ -361,7 +361,15 @@ fn serialize_page_def(pd: &PageDef) -> Vec<u8> {
     w.write_u32(pd.margin_header).unwrap();
     w.write_u32(pd.margin_footer).unwrap();
     w.write_u32(pd.margin_gutter).unwrap();
-    w.write_u32(pd.attr).unwrap();
+    // [#1166] 용지 방향(landscape)은 attr bit0 (parse: body_text.rs `attr & 0x01`).
+    // HWPX 출처 문서는 pd.landscape 만 설정되고 attr bit0 은 0 이므로, 직렬화 시
+    // landscape 를 attr bit0 에 동기화해야 HWP5 저장본이 가로 방향을 보존한다.
+    let attr = if pd.landscape {
+        pd.attr | 0x01
+    } else {
+        pd.attr & !0x01
+    };
+    w.write_u32(attr).unwrap();
     w.into_bytes()
 }
 

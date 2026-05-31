@@ -77,6 +77,7 @@ export const hwpdocument_getCellParagraphCountByPath: (a: number, b: number, c: 
 export const hwpdocument_getCellParagraphLength: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
 export const hwpdocument_getCellParagraphLengthByPath: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
 export const hwpdocument_getCellProperties: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+export const hwpdocument_getCellShapePropertiesByPath: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
 export const hwpdocument_getCellStyleAt: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
 export const hwpdocument_getCellTextDirection: (a: number, b: number, c: number, d: number, e: number) => [number, number, number];
 export const hwpdocument_getCharPropertiesAt: (a: number, b: number, c: number, d: number) => [number, number, number, number];
@@ -116,6 +117,7 @@ export const hwpdocument_getLineInfo: (a: number, b: number, c: number, d: numbe
 export const hwpdocument_getLineInfoInCell: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
 export const hwpdocument_getLogicalLength: (a: number, b: number, c: number) => [number, number, number];
 export const hwpdocument_getNumberingList: (a: number) => [number, number];
+export const hwpdocument_getPageBorderFill: (a: number, b: number) => [number, number, number, number];
 export const hwpdocument_getPageControlLayout: (a: number, b: number) => [number, number, number, number];
 export const hwpdocument_getPageDef: (a: number, b: number) => [number, number, number, number];
 export const hwpdocument_getPageFootnoteInfo: (a: number, b: number, c: number) => [number, number, number, number];
@@ -225,6 +227,7 @@ export const hwpdocument_setActiveField: (a: number, b: number, c: number, d: nu
 export const hwpdocument_setActiveFieldByPath: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
 export const hwpdocument_setActiveFieldInCell: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => number;
 export const hwpdocument_setCellProperties: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => [number, number, number, number];
+export const hwpdocument_setCellShapePropertiesByPath: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
 export const hwpdocument_setClipEnabled: (a: number, b: number) => void;
 export const hwpdocument_setColumnDef: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
 export const hwpdocument_setDpi: (a: number, b: number) => void;
@@ -237,6 +240,7 @@ export const hwpdocument_setFormValue: (a: number, b: number, c: number, d: numb
 export const hwpdocument_setFormValueInCell: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number, number, number];
 export const hwpdocument_setHeaderFooterPictureProperties: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number) => [number, number, number, number];
 export const hwpdocument_setNumberingRestart: (a: number, b: number, c: number, d: number, e: number) => [number, number, number, number];
+export const hwpdocument_setPageBorderFill: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const hwpdocument_setPageDef: (a: number, b: number, c: number, d: number) => [number, number, number, number];
 export const hwpdocument_setPageHide: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => [number, number, number, number];
 export const hwpdocument_setPictureProperties: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number, number];
