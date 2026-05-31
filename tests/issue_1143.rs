@@ -21,6 +21,18 @@ struct ExternalImageReference {
     loaded: bool,
 }
 
+const SAMPLE10_EXTERNAL_FORMATS: &[(&str, &str)] = &[
+    ("hwp3", "samples/hwp3-sample10.hwp"),
+    ("hwp5", "samples/hwp3-sample10-hwp5.hwp"),
+    ("hwpx", "samples/hwp3-sample10-hwpx.hwpx"),
+];
+
+const SAMPLE10_EXTERNAL_IMAGES: &[(u16, &str, &str, &str)] = &[
+    (1, "oracle.gif", "gif", "samples/oracle.gif"),
+    (2, "rdb02.gif", "gif", "samples/rdb02.gif"),
+    (3, "s1.jpg", "jpg", "samples/s1.jpg"),
+];
+
 fn load_doc(rel_path: &str) -> HwpDocument {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(rel_path);
     let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e));
@@ -100,6 +112,44 @@ fn item_detail_contains(item: &Value, needle: &str) -> bool {
     item["detail"]
         .as_str()
         .is_some_and(|detail| detail.split(';').any(|part| part == needle))
+}
+
+fn expected_sample10_basenames_from(start: usize) -> Vec<String> {
+    SAMPLE10_EXTERNAL_IMAGES[start..]
+        .iter()
+        .map(|(_, basename, _, _)| (*basename).to_string())
+        .collect()
+}
+
+fn assert_sample10_external_refs(
+    label: &str,
+    refs: &[ExternalImageReference],
+    loaded_through: usize,
+) {
+    assert_eq!(
+        refs.len(),
+        SAMPLE10_EXTERNAL_IMAGES.len(),
+        "{label}: sample10 should expose three external image refs"
+    );
+
+    for (index, (reference, (bin_id, basename, extension, _sample_path))) in
+        refs.iter().zip(SAMPLE10_EXTERNAL_IMAGES.iter()).enumerate()
+    {
+        assert_eq!(reference.bin_data_id, *bin_id, "{label}: binDataId");
+        assert_eq!(reference.key, format!("binData:{bin_id}"), "{label}: key");
+        assert_eq!(reference.basename, *basename, "{label}: basename");
+        assert_eq!(reference.extension, *extension, "{label}: extension");
+        assert!(
+            reference.original_path.ends_with(basename),
+            "{label}: original path should end with {basename}. got={}",
+            reference.original_path
+        );
+        assert_eq!(
+            reference.loaded,
+            index < loaded_through,
+            "{label}: loaded state for {basename}"
+        );
+    }
 }
 
 #[test]
@@ -242,6 +292,87 @@ fn issue_1143_key_injection_uses_discovery_key_and_invalidates_cache() {
         after_payloads > before_payloads,
         "key injection should invalidate cached PageLayerTrees"
     );
+}
+
+#[test]
+fn issue_1143_key_injection_works_across_hwp3_hwp5_and_hwpx_sample10() {
+    for (label, rel_path) in SAMPLE10_EXTERNAL_FORMATS {
+        let mut doc = load_doc(rel_path);
+        let refs = external_image_refs(&doc);
+        assert_sample10_external_refs(label, &refs, 0);
+        assert_eq!(
+            external_image_basenames(&doc),
+            expected_sample10_basenames_from(0),
+            "{label}: basename API should list missing images before injection"
+        );
+
+        let before_payloads = page_layer_image_payload_count(&doc, 0);
+        assert_eq!(
+            before_payloads, 0,
+            "{label}: sample10 page 1 external images should have no payload before injection"
+        );
+
+        let before_items = canvaskit_image_items(&doc, 0);
+        assert!(
+            before_items.iter().any(|item| {
+                item["status"].as_str() == Some("directRequired")
+                    && item_detail_contains(item, "externalImage")
+                    && item_detail_contains(item, "missingImageData")
+            }),
+            "{label}: CanvasKit should report missing external image bytes before injection: {before_items:?}"
+        );
+
+        for (image_index, (bin_id, basename, _extension, sample_path)) in
+            SAMPLE10_EXTERNAL_IMAGES.iter().enumerate()
+        {
+            let reference = refs
+                .iter()
+                .find(|reference| reference.bin_data_id == *bin_id)
+                .unwrap_or_else(|| panic!("{label}: binDataId {bin_id} ref"));
+            let data = read_sample(sample_path);
+            let display_path = format!("/tmp/{basename}");
+            assert_eq!(
+                doc.inject_external_image_by_key(&reference.key, &data, &display_path),
+                1,
+                "{label}: key injection should load {basename}"
+            );
+
+            let refs_after_step = external_image_refs(&doc);
+            assert_sample10_external_refs(label, &refs_after_step, image_index + 1);
+            assert_eq!(
+                external_image_basenames(&doc),
+                expected_sample10_basenames_from(image_index + 1),
+                "{label}: basename API should list only still-missing images after injecting {basename}"
+            );
+        }
+
+        let after_payloads = page_layer_image_payload_count(&doc, 0);
+        assert!(
+            after_payloads >= SAMPLE10_EXTERNAL_IMAGES.len(),
+            "{label}: PageLayerTree should include mime/base64 payloads after injection"
+        );
+
+        let after_items = canvaskit_image_items(&doc, 0);
+        let injected_direct = after_items
+            .iter()
+            .filter(|item| {
+                item["status"].as_str() == Some("direct")
+                    && item_detail_contains(item, "externalImage")
+                    && item_detail_contains(item, "injectedImageData")
+            })
+            .count();
+        assert!(
+            injected_direct >= SAMPLE10_EXTERNAL_IMAGES.len(),
+            "{label}: injected external images should be directly replayable: {after_items:?}"
+        );
+        assert!(
+            !after_items.iter().any(|item| {
+                item_detail_contains(item, "externalImage")
+                    && item_detail_contains(item, "missingImageData")
+            }),
+            "{label}: injected external images should not remain in missing-image state: {after_items:?}"
+        );
+    }
 }
 
 #[test]
