@@ -752,7 +752,7 @@ impl DocumentCore {
         } else {
             (0.0, 0.0, 0.0, 0.0)
         };
-        let (out_l, out_r, out_t, out_b) = visual_outsets;
+        let (out_l, out_r, out_t, _out_b) = visual_outsets;
         let (page_border_left, page_border_right, page_border_top, page_border_bottom) =
             match page_border_fill.basis {
                 PageBorderBasis::PaperBased => (pbf_left, pbf_right, pbf_top, pbf_bottom),
@@ -760,7 +760,7 @@ impl DocumentCore {
                     (ml - pbf_left - out_l).max(0.0),
                     (mr - pbf_right - out_r).max(0.0),
                     (body_top - pbf_top - out_t).max(0.0),
-                    (body_bottom_margin - pbf_bottom - out_b).max(0.0),
+                    (body_bottom_margin - pbf_bottom).max(0.0),
                 ),
             };
         // 단별 영역 정보
@@ -1454,11 +1454,22 @@ impl DocumentCore {
                         }
                         _ => String::new(),
                     };
+                    let note_ref = eq_node.note_ref.as_ref().map_or_else(String::new, |r| {
+                        format!(
+                            ",\"noteRef\":{{\"kind\":\"{}\",\"sectionIdx\":{},\"paraIdx\":{},\"controlIdx\":{},\"noteParaIdx\":{},\"innerControlIdx\":{}}}",
+                            r.kind,
+                            r.section_index,
+                            r.para_index,
+                            r.control_index,
+                            r.note_para_index,
+                            r.inner_control_index
+                        )
+                    });
 
                     controls.push(format!(
-                        "{{\"type\":\"equation\",\"x\":{:.1},\"y\":{:.1},\"w\":{:.1},\"h\":{:.1}{}{}}}",
+                        "{{\"type\":\"equation\",\"x\":{:.1},\"y\":{:.1},\"w\":{:.1},\"h\":{:.1}{}{}{}}}",
                         node.bbox.x, node.bbox.y, node.bbox.width, node.bbox.height,
-                        doc_coords, cell_coords
+                        doc_coords, cell_coords, note_ref
                     ));
                     return;
                 }
@@ -1894,6 +1905,7 @@ impl DocumentCore {
                 hidden_empty_paras: std::collections::HashSet::new(),
                 endnotes: Vec::new(),
                 endnote_paragraphs: Vec::new(),
+                endnote_para_sources: Vec::new(),
             });
         }
         self.pagination.truncate(sec_count);
@@ -2051,6 +2063,7 @@ impl DocumentCore {
                     self.document.is_hwp3_variant,
                     hwp3_origin_flow_spacing_before,
                     hwp3_origin_page_tolerance,
+                    Some(&section.section_def.endnote_shape),
                     force_breaks.get(idx).unwrap_or(&empty_breaks),
                     matches!(self.source_format, crate::parser::FileFormat::Hwpx),
                 )
@@ -2418,15 +2431,18 @@ impl DocumentCore {
                             p.column_contents.iter().any(|cc| {
                                 cc.items.iter().any(|item| {
                                     let pi = match item {
-                                        PageItem::FullParagraph { para_index } => *para_index,
+                                        PageItem::FullParagraph { para_index } => Some(*para_index),
                                         PageItem::PartialParagraph { para_index, .. } => {
-                                            *para_index
+                                            Some(*para_index)
                                         }
-                                        PageItem::Table { para_index, .. } => *para_index,
-                                        PageItem::PartialTable { para_index, .. } => *para_index,
-                                        PageItem::Shape { para_index, .. } => *para_index,
+                                        PageItem::Table { para_index, .. } => Some(*para_index),
+                                        PageItem::PartialTable { para_index, .. } => {
+                                            Some(*para_index)
+                                        }
+                                        PageItem::Shape { para_index, .. } => Some(*para_index),
+                                        PageItem::EndnoteSeparator { .. } => None,
                                     };
-                                    pi >= hdr_pi
+                                    pi.is_some_and(|pi| pi >= hdr_pi)
                                 })
                             })
                         })
@@ -2442,15 +2458,18 @@ impl DocumentCore {
                             p.column_contents.iter().any(|cc| {
                                 cc.items.iter().any(|item| {
                                     let pi = match item {
-                                        PageItem::FullParagraph { para_index } => *para_index,
+                                        PageItem::FullParagraph { para_index } => Some(*para_index),
                                         PageItem::PartialParagraph { para_index, .. } => {
-                                            *para_index
+                                            Some(*para_index)
                                         }
-                                        PageItem::Table { para_index, .. } => *para_index,
-                                        PageItem::PartialTable { para_index, .. } => *para_index,
-                                        PageItem::Shape { para_index, .. } => *para_index,
+                                        PageItem::Table { para_index, .. } => Some(*para_index),
+                                        PageItem::PartialTable { para_index, .. } => {
+                                            Some(*para_index)
+                                        }
+                                        PageItem::Shape { para_index, .. } => Some(*para_index),
+                                        PageItem::EndnoteSeparator { .. } => None,
                                     };
-                                    pi >= ftr_pi
+                                    pi.is_some_and(|pi| pi >= ftr_pi)
                                 })
                             })
                         })
@@ -2548,6 +2567,7 @@ impl DocumentCore {
                                 PageItem::Table { para_index, .. } => *para_index,
                                 PageItem::PartialTable { para_index, .. } => *para_index,
                                 PageItem::Shape { para_index, .. } => *para_index,
+                                PageItem::EndnoteSeparator { .. } => usize::MAX,
                             };
                             if pi < col_map.len() {
                                 col_map[pi] = ci;
@@ -2848,6 +2868,19 @@ impl DocumentCore {
                                     para_index, control_index, shape_info, vpos_info
                                 ));
                             }
+                            PageItem::EndnoteSeparator {
+                                separator_length,
+                                margin_above,
+                                margin_below,
+                                line_width,
+                                color,
+                                ..
+                            } => {
+                                out.push_str(&format!(
+                                    "    EndnoteSeparator len={} above={} below={} width={} color=#{:06x}\n",
+                                    separator_length, margin_above, margin_below, line_width, color & 0x00ff_ffff
+                                ));
+                            }
                         }
                     }
                 }
@@ -3059,6 +3092,8 @@ impl DocumentCore {
         if let Some(pr) = self.pagination.get(sec_idx) {
             self.layout_engine
                 .set_hidden_empty_paras(&pr.hidden_empty_paras);
+            self.layout_engine
+                .set_endnote_para_sources(paragraphs.len(), &pr.endnote_para_sources);
         }
 
         // [Task #836] 미주 paragraphs를 본문 paragraphs 뒤에 합쳐서 전달

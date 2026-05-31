@@ -2729,6 +2729,52 @@ impl HwpDocument {
         .map_err(|e| e.into())
     }
 
+    /// 각주/미주 내부 수식 컨트롤의 속성을 조회한다.
+    #[wasm_bindgen(js_name = getNoteEquationProperties)]
+    pub fn get_note_equation_properties(
+        &self,
+        kind: &str,
+        section_idx: u32,
+        parent_para_idx: u32,
+        note_control_idx: u32,
+        note_para_idx: u32,
+        inner_control_idx: u32,
+    ) -> Result<String, JsValue> {
+        self.get_note_equation_properties_native(
+            kind,
+            section_idx as usize,
+            parent_para_idx as usize,
+            note_control_idx as usize,
+            note_para_idx as usize,
+            inner_control_idx as usize,
+        )
+        .map_err(|e| e.into())
+    }
+
+    /// 각주/미주 내부 수식 컨트롤의 속성을 변경한다.
+    #[wasm_bindgen(js_name = setNoteEquationProperties)]
+    pub fn set_note_equation_properties(
+        &mut self,
+        kind: &str,
+        section_idx: u32,
+        parent_para_idx: u32,
+        note_control_idx: u32,
+        note_para_idx: u32,
+        inner_control_idx: u32,
+        props_json: &str,
+    ) -> Result<String, JsValue> {
+        self.set_note_equation_properties_native(
+            kind,
+            section_idx as usize,
+            parent_para_idx as usize,
+            note_control_idx as usize,
+            note_para_idx as usize,
+            inner_control_idx as usize,
+            props_json,
+        )
+        .map_err(|e| e.into())
+    }
+
     /// 수식 스크립트를 SVG로 렌더링하여 반환한다 (미리보기 전용).
     ///
     /// 반환: 완전한 `<svg>` 문자열
@@ -3004,6 +3050,40 @@ impl HwpDocument {
         .map_err(|e| e.into())
     }
 
+    /// 미주를 삽입한다.
+    #[wasm_bindgen(js_name = insertEndnote)]
+    pub fn insert_endnote(
+        &mut self,
+        section_idx: u32,
+        para_idx: u32,
+        char_offset: u32,
+    ) -> Result<String, JsValue> {
+        self.insert_endnote_native(
+            section_idx as usize,
+            para_idx as usize,
+            char_offset as usize,
+        )
+        .map_err(|e| e.into())
+    }
+
+    /// 미주 모양을 조회한다.
+    #[wasm_bindgen(js_name = getEndnoteShape)]
+    pub fn get_endnote_shape(&self, section_idx: u32) -> Result<String, JsValue> {
+        self.get_endnote_shape_native(section_idx as usize)
+            .map_err(|e| e.into())
+    }
+
+    /// 미주 모양을 적용한다.
+    #[wasm_bindgen(js_name = applyEndnoteShape)]
+    pub fn apply_endnote_shape(
+        &mut self,
+        section_idx: u32,
+        props_json: &str,
+    ) -> Result<String, JsValue> {
+        self.apply_endnote_shape_native(section_idx as usize, props_json)
+            .map_err(|e| e.into())
+    }
+
     /// 수식을 삽입한다.
     #[wasm_bindgen(js_name = insertEquation)]
     pub fn insert_equation(
@@ -3199,6 +3279,80 @@ impl HwpDocument {
             footnote_index as usize,
             fn_para_idx as usize,
             char_offset as usize,
+        )
+        .map_err(|e| e.into())
+    }
+
+    /// 각주/미주 편집 모드 진입 대상 조회
+    #[wasm_bindgen(js_name = getNoteEditInfo)]
+    pub fn get_note_edit_info(
+        &self,
+        section_idx: u32,
+        para_idx: u32,
+        control_idx: u32,
+    ) -> Result<String, JsValue> {
+        self.get_note_edit_info_native(
+            section_idx as usize,
+            para_idx as usize,
+            control_idx as usize,
+        )
+        .map_err(|e| e.into())
+    }
+
+    /// 각주/미주 내부 커서 렉트 계산
+    #[wasm_bindgen(js_name = getCursorRectInNote)]
+    pub fn get_cursor_rect_in_note(
+        &self,
+        section_idx: u32,
+        para_idx: u32,
+        control_idx: u32,
+        note_para_idx: u32,
+        char_offset: u32,
+    ) -> Result<String, JsValue> {
+        self.get_cursor_rect_in_note_native(
+            section_idx as usize,
+            para_idx as usize,
+            control_idx as usize,
+            note_para_idx as usize,
+            char_offset as usize,
+        )
+        .map_err(|e| e.into())
+    }
+
+    /// 각주/미주 내부 문단 속성 조회
+    #[wasm_bindgen(js_name = getParaPropertiesInFootnote)]
+    pub fn get_para_properties_in_footnote(
+        &self,
+        section_idx: u32,
+        para_idx: u32,
+        control_idx: u32,
+        fn_para_idx: u32,
+    ) -> Result<String, JsValue> {
+        self.get_para_properties_in_footnote_native(
+            section_idx as usize,
+            para_idx as usize,
+            control_idx as usize,
+            fn_para_idx as usize,
+        )
+        .map_err(|e| e.into())
+    }
+
+    /// 각주/미주 내부 문단 속성 적용
+    #[wasm_bindgen(js_name = applyParaFormatInFootnote)]
+    pub fn apply_para_format_in_footnote(
+        &mut self,
+        section_idx: u32,
+        para_idx: u32,
+        control_idx: u32,
+        fn_para_idx: u32,
+        props_json: &str,
+    ) -> Result<String, JsValue> {
+        self.apply_para_format_in_footnote_native(
+            section_idx as usize,
+            para_idx as usize,
+            control_idx as usize,
+            fn_para_idx as usize,
+            props_json,
         )
         .map_err(|e| e.into())
     }
@@ -4008,6 +4162,28 @@ impl HwpDocument {
                 control_idx as usize,
                 cell_idx as usize,
             )),
+        )
+        .map_err(|e| e.into())
+    }
+
+    /// 각주/미주 내부 선택 영역의 줄별 사각형을 반환한다.
+    #[wasm_bindgen(js_name = getSelectionRectsInFootnote)]
+    pub fn get_selection_rects_in_footnote(
+        &self,
+        page_num: u32,
+        footnote_index: u32,
+        start_fn_para_idx: u32,
+        start_char_offset: u32,
+        end_fn_para_idx: u32,
+        end_char_offset: u32,
+    ) -> Result<String, JsValue> {
+        self.get_selection_rects_in_footnote_native(
+            page_num,
+            footnote_index as usize,
+            start_fn_para_idx as usize,
+            start_char_offset as usize,
+            end_fn_para_idx as usize,
+            end_char_offset as usize,
         )
         .map_err(|e| e.into())
     }

@@ -3214,6 +3214,7 @@ mod tests {
                             control_index: None,
                             cell_index: None,
                             cell_para_index: None,
+                            note_ref: None,
                         },
                     },
                     PaintOp::Placeholder {

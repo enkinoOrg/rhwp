@@ -15,31 +15,262 @@ use crate::model::shape::{common_obj_offsets, ShapeObject};
 const MIN_SHAPE_SIZE: u32 = 200;
 
 impl DocumentCore {
+    fn resolve_shape_control_ref(
+        &self,
+        section_idx: usize,
+        parent_para_idx: usize,
+        control_idx: usize,
+    ) -> Result<&ShapeObject, HwpError> {
+        let section = self.document.sections.get(section_idx).ok_or_else(|| {
+            HwpError::RenderError(format!("구역 인덱스 {} 범위 초과", section_idx))
+        })?;
+
+        let body_len = section.paragraphs.len();
+        let para = if parent_para_idx < body_len {
+            section.paragraphs.get(parent_para_idx).ok_or_else(|| {
+                HwpError::RenderError(format!("문단 인덱스 {} 범위 초과", parent_para_idx))
+            })?
+        } else {
+            let mut virtual_idx = parent_para_idx - body_len;
+            let mut found = None;
+            'outer: for body_para in &section.paragraphs {
+                for ctrl in &body_para.controls {
+                    if let Control::Endnote(en) = ctrl {
+                        if virtual_idx < en.paragraphs.len() {
+                            found = en.paragraphs.get(virtual_idx);
+                            break 'outer;
+                        }
+                        virtual_idx -= en.paragraphs.len();
+                    }
+                }
+            }
+            found.ok_or_else(|| {
+                HwpError::RenderError(format!("문단 인덱스 {} 범위 초과", parent_para_idx))
+            })?
+        };
+
+        let ctrl = para.controls.get(control_idx).ok_or_else(|| {
+            HwpError::RenderError(format!("컨트롤 인덱스 {} 범위 초과", control_idx))
+        })?;
+        match ctrl {
+            Control::Shape(s) => Ok(s.as_ref()),
+            _ => Err(HwpError::RenderError(
+                "지정된 컨트롤이 Shape이 아닙니다".to_string(),
+            )),
+        }
+    }
+
+    fn resolve_shape_control_mut(
+        &mut self,
+        section_idx: usize,
+        parent_para_idx: usize,
+        control_idx: usize,
+    ) -> Result<&mut ShapeObject, HwpError> {
+        let section = self.document.sections.get_mut(section_idx).ok_or_else(|| {
+            HwpError::RenderError(format!("구역 인덱스 {} 범위 초과", section_idx))
+        })?;
+
+        let body_len = section.paragraphs.len();
+        let para = if parent_para_idx < body_len {
+            section.paragraphs.get_mut(parent_para_idx).ok_or_else(|| {
+                HwpError::RenderError(format!("문단 인덱스 {} 범위 초과", parent_para_idx))
+            })?
+        } else {
+            let mut virtual_idx = parent_para_idx - body_len;
+            let mut found = None;
+            'outer: for body_para in &mut section.paragraphs {
+                for ctrl in &mut body_para.controls {
+                    if let Control::Endnote(en) = ctrl {
+                        if virtual_idx < en.paragraphs.len() {
+                            found = en.paragraphs.get_mut(virtual_idx);
+                            break 'outer;
+                        }
+                        virtual_idx -= en.paragraphs.len();
+                    }
+                }
+            }
+            found.ok_or_else(|| {
+                HwpError::RenderError(format!("문단 인덱스 {} 범위 초과", parent_para_idx))
+            })?
+        };
+
+        let ctrl = para.controls.get_mut(control_idx).ok_or_else(|| {
+            HwpError::RenderError(format!("컨트롤 인덱스 {} 범위 초과", control_idx))
+        })?;
+        match ctrl {
+            Control::Shape(s) => Ok(s.as_mut()),
+            _ => Err(HwpError::RenderError(
+                "지정된 컨트롤이 Shape이 아닙니다".to_string(),
+            )),
+        }
+    }
+
+    fn resolve_picture_control_ref(
+        &self,
+        section_idx: usize,
+        parent_para_idx: usize,
+        control_idx: usize,
+    ) -> Result<&crate::model::image::Picture, HwpError> {
+        let section = self.document.sections.get(section_idx).ok_or_else(|| {
+            HwpError::RenderError(format!("구역 인덱스 {} 범위 초과", section_idx))
+        })?;
+
+        let body_len = section.paragraphs.len();
+        let para = if parent_para_idx < body_len {
+            section.paragraphs.get(parent_para_idx).ok_or_else(|| {
+                HwpError::RenderError(format!("문단 인덱스 {} 범위 초과", parent_para_idx))
+            })?
+        } else {
+            let mut virtual_idx = parent_para_idx - body_len;
+            let mut found = None;
+            'outer: for body_para in &section.paragraphs {
+                for ctrl in &body_para.controls {
+                    if let Control::Endnote(en) = ctrl {
+                        if virtual_idx < en.paragraphs.len() {
+                            found = en.paragraphs.get(virtual_idx);
+                            break 'outer;
+                        }
+                        virtual_idx -= en.paragraphs.len();
+                    }
+                }
+            }
+            found.ok_or_else(|| {
+                HwpError::RenderError(format!("문단 인덱스 {} 범위 초과", parent_para_idx))
+            })?
+        };
+
+        let ctrl = para.controls.get(control_idx).ok_or_else(|| {
+            HwpError::RenderError(format!("컨트롤 인덱스 {} 범위 초과", control_idx))
+        })?;
+        match ctrl {
+            Control::Picture(p) => Ok(p),
+            Control::Shape(shape) => match shape.as_ref() {
+                ShapeObject::Picture(p) => Ok(p),
+                _ => Err(HwpError::RenderError(
+                    "지정된 Shape 컨트롤이 그림이 아닙니다".to_string(),
+                )),
+            },
+            _ => Err(HwpError::RenderError(
+                "지정된 컨트롤이 그림이 아닙니다".to_string(),
+            )),
+        }
+    }
+
+    fn resolve_picture_control_mut(
+        &mut self,
+        section_idx: usize,
+        parent_para_idx: usize,
+        control_idx: usize,
+    ) -> Result<&mut crate::model::image::Picture, HwpError> {
+        let section = self.document.sections.get_mut(section_idx).ok_or_else(|| {
+            HwpError::RenderError(format!("구역 인덱스 {} 범위 초과", section_idx))
+        })?;
+
+        let body_len = section.paragraphs.len();
+        let para = if parent_para_idx < body_len {
+            section.paragraphs.get_mut(parent_para_idx).ok_or_else(|| {
+                HwpError::RenderError(format!("문단 인덱스 {} 범위 초과", parent_para_idx))
+            })?
+        } else {
+            let mut virtual_idx = parent_para_idx - body_len;
+            let mut found = None;
+            'outer: for body_para in &mut section.paragraphs {
+                for ctrl in &mut body_para.controls {
+                    if let Control::Endnote(en) = ctrl {
+                        if virtual_idx < en.paragraphs.len() {
+                            found = en.paragraphs.get_mut(virtual_idx);
+                            break 'outer;
+                        }
+                        virtual_idx -= en.paragraphs.len();
+                    }
+                }
+            }
+            found.ok_or_else(|| {
+                HwpError::RenderError(format!("문단 인덱스 {} 범위 초과", parent_para_idx))
+            })?
+        };
+
+        let ctrl = para.controls.get_mut(control_idx).ok_or_else(|| {
+            HwpError::RenderError(format!("컨트롤 인덱스 {} 범위 초과", control_idx))
+        })?;
+        match ctrl {
+            Control::Picture(p) => Ok(p),
+            Control::Shape(shape) => match shape.as_mut() {
+                ShapeObject::Picture(p) => Ok(p),
+                _ => Err(HwpError::RenderError(
+                    "지정된 Shape 컨트롤이 그림이 아닙니다".to_string(),
+                )),
+            },
+            _ => Err(HwpError::RenderError(
+                "지정된 컨트롤이 그림이 아닙니다".to_string(),
+            )),
+        }
+    }
+
     pub fn get_picture_properties_native(
         &self,
         section_idx: usize,
         parent_para_idx: usize,
         control_idx: usize,
     ) -> Result<String, HwpError> {
-        let section = self.document.sections.get(section_idx).ok_or_else(|| {
-            HwpError::RenderError(format!("구역 인덱스 {} 범위 초과", section_idx))
-        })?;
-        let para = section.paragraphs.get(parent_para_idx).ok_or_else(|| {
-            HwpError::RenderError(format!("문단 인덱스 {} 범위 초과", parent_para_idx))
-        })?;
-        let ctrl = para.controls.get(control_idx).ok_or_else(|| {
-            HwpError::RenderError(format!("컨트롤 인덱스 {} 범위 초과", control_idx))
-        })?;
-
-        let pic = match ctrl {
-            crate::model::control::Control::Picture(p) => p,
-            _ => {
-                return Err(HwpError::RenderError(
-                    "지정된 컨트롤이 그림이 아닙니다".to_string(),
-                ))
-            }
-        };
+        let pic = self.resolve_picture_control_ref(section_idx, parent_para_idx, control_idx)?;
         Self::format_picture_properties_json(pic)
+    }
+
+    fn picture_crop_extent_hu(pic: &crate::model::image::Picture) -> (i32, i32) {
+        let width = if pic.shape_attr.original_width > 0 {
+            pic.shape_attr.original_width
+        } else {
+            pic.shape_attr.current_width
+        };
+        let height = if pic.shape_attr.original_height > 0 {
+            pic.shape_attr.original_height
+        } else {
+            pic.shape_attr.current_height
+        };
+        (
+            i32::try_from(width).unwrap_or(i32::MAX),
+            i32::try_from(height).unwrap_or(i32::MAX),
+        )
+    }
+
+    fn picture_crop_ui_amounts(pic: &crate::model::image::Picture) -> (i32, i32, i32, i32) {
+        let (extent_w, extent_h) = Self::picture_crop_extent_hu(pic);
+        let left = pic.crop.left.max(0);
+        let top = pic.crop.top.max(0);
+        let right = if extent_w > 0 && pic.crop.right > left {
+            (extent_w - pic.crop.right).max(0)
+        } else {
+            0
+        };
+        let bottom = if extent_h > 0 && pic.crop.bottom > top {
+            (extent_h - pic.crop.bottom).max(0)
+        } else {
+            0
+        };
+        (left, top, right, bottom)
+    }
+
+    fn set_picture_crop_from_ui_amounts(
+        pic: &mut crate::model::image::Picture,
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
+    ) {
+        let (extent_w, extent_h) = Self::picture_crop_extent_hu(pic);
+        pic.crop.left = left.max(0);
+        pic.crop.top = top.max(0);
+        if extent_w > 0 {
+            pic.crop.right = (extent_w - right.max(0)).max(pic.crop.left);
+        } else {
+            pic.crop.right = right.max(0);
+        }
+        if extent_h > 0 {
+            pic.crop.bottom = (extent_h - bottom.max(0)).max(pic.crop.top);
+        } else {
+            pic.crop.bottom = bottom.max(0);
+        }
     }
 
     /// [Task #825] 머리말/꼬리말 안 그림의 속성 조회.
@@ -152,6 +383,7 @@ impl DocumentCore {
         };
 
         let sa = &pic.shape_attr;
+        let (crop_left, crop_top, crop_right, crop_bottom) = Self::picture_crop_ui_amounts(pic);
 
         Ok(format!(
             concat!(
@@ -190,7 +422,7 @@ impl DocumentCore {
             // 원본 크기
             sa.original_width, sa.original_height,
             // 자르기
-            pic.crop.left, pic.crop.top, pic.crop.right, pic.crop.bottom,
+            crop_left, crop_top, crop_right, crop_bottom,
             // 안쪽 여백
             pic.padding.left, pic.padding.top, pic.padding.right, pic.padding.bottom,
             // 바깥 여백
@@ -227,59 +459,70 @@ impl DocumentCore {
         props_json: &str,
     ) -> Result<String, HwpError> {
         // JSON 파싱 (serde_json 사용 대신 수동 파싱 — 기존 패턴)
-        let section = self.document.sections.get_mut(section_idx).ok_or_else(|| {
-            HwpError::RenderError(format!("구역 인덱스 {} 범위 초과", section_idx))
-        })?;
-        let para = section.paragraphs.get_mut(parent_para_idx).ok_or_else(|| {
-            HwpError::RenderError(format!("문단 인덱스 {} 범위 초과", parent_para_idx))
-        })?;
-        let ctrl = para.controls.get_mut(control_idx).ok_or_else(|| {
-            HwpError::RenderError(format!("컨트롤 인덱스 {} 범위 초과", control_idx))
-        })?;
-
-        let pic = match ctrl {
-            crate::model::control::Control::Picture(p) => p,
-            _ => {
-                return Err(HwpError::RenderError(
-                    "지정된 컨트롤이 그림이 아닙니다".to_string(),
-                ))
-            }
-        };
-        // [Task #1151 v2] tac false→true migration 검출용 snapshot.
-        let was_tac = pic.common.treat_as_char;
         // [Task #825] 픽쳐 속성 mutation 은 helper 로 분리 (머리말/꼬리말 path 와 공유).
-        let caption_created = Self::apply_picture_props_inner(pic, props_json);
-        let now_tac = pic.common.treat_as_char;
+        let (caption_created, should_migrate_to_inline) = {
+            let pic =
+                self.resolve_picture_control_mut(section_idx, parent_para_idx, control_idx)?;
+            // [Task #1151 v2] tac false→true migration 검출용 snapshot.
+            let was_tac = pic.common.treat_as_char;
+            let caption_created = Self::apply_picture_props_inner(pic, props_json);
+            let now_tac = pic.common.treat_as_char;
+            (caption_created, !was_tac && now_tac)
+        };
 
         // [Task #1151 v2] floating → inline migration (H1 정합, samples/tac-verify/).
         // 한컴 산출물 Scenario A~D 분석: tac false→true 시 picture 의 control 위치는
         // 불변이고, 4 필드만 갱신 (treat_as_char / h/v_rel_to=Para / h/v_offset=0 /
         // parent line_segs[0]). text/char_offsets/paragraph 수 변화 없음.
-        if !was_tac && now_tac {
-            let para = section
-                .paragraphs
-                .get_mut(parent_para_idx)
-                .expect("paragraph snapshot 직후, 인덱스 유효");
+        if should_migrate_to_inline {
+            let section = self.document.sections.get_mut(section_idx).ok_or_else(|| {
+                HwpError::RenderError(format!("구역 인덱스 {} 범위 초과", section_idx))
+            })?;
+            let body_len = section.paragraphs.len();
+            let para = if parent_para_idx < body_len {
+                section.paragraphs.get_mut(parent_para_idx).ok_or_else(|| {
+                    HwpError::RenderError(format!("문단 인덱스 {} 범위 초과", parent_para_idx))
+                })?
+            } else {
+                let mut virtual_idx = parent_para_idx - body_len;
+                let mut found = None;
+                'outer: for body_para in &mut section.paragraphs {
+                    for ctrl in &mut body_para.controls {
+                        if let Control::Endnote(en) = ctrl {
+                            if virtual_idx < en.paragraphs.len() {
+                                found = en.paragraphs.get_mut(virtual_idx);
+                                break 'outer;
+                            }
+                            virtual_idx -= en.paragraphs.len();
+                        }
+                    }
+                }
+                found.ok_or_else(|| {
+                    HwpError::RenderError(format!("문단 인덱스 {} 범위 초과", parent_para_idx))
+                })?
+            };
             let crate::model::paragraph::Paragraph {
                 line_segs,
                 controls,
                 ..
             } = &mut *para;
-            if let Some(crate::model::control::Control::Picture(pic_box)) =
-                controls.get_mut(control_idx)
-            {
-                Self::migrate_picture_floating_to_inline(line_segs, pic_box.as_mut());
+            match controls.get_mut(control_idx) {
+                Some(Control::Picture(pic_box)) => {
+                    Self::migrate_picture_floating_to_inline(line_segs, pic_box.as_mut());
+                }
+                Some(Control::Shape(shape)) => {
+                    if let ShapeObject::Picture(pic) = shape.as_mut() {
+                        Self::migrate_picture_floating_to_inline(line_segs, pic);
+                    }
+                }
+                _ => {}
             }
         }
         // 캡션 생성 시 AutoNumber 재할당 + 텍스트 생성 (본문 path 만 — 머리말/꼬리말은 별도).
         if caption_created {
             crate::parser::assign_auto_numbers(&mut self.document);
-            let pic_mut = match &mut self.document.sections[section_idx].paragraphs[parent_para_idx]
-                .controls[control_idx]
-            {
-                crate::model::control::Control::Picture(p) => p,
-                _ => unreachable!(),
-            };
+            let pic_mut =
+                self.resolve_picture_control_mut(section_idx, parent_para_idx, control_idx)?;
             let para = &mut pic_mut.caption.as_mut().unwrap().paragraphs[0];
             para.text = "그림  ".to_string();
             para.char_offsets = vec![0, 1, 2, 11];
@@ -301,14 +544,13 @@ impl DocumentCore {
             ctrl: control_idx,
         });
         if caption_created {
-            let char_offset = match &self.document.sections[section_idx].paragraphs[parent_para_idx]
-                .controls[control_idx]
-            {
-                crate::model::control::Control::Picture(p) => p.caption.as_ref().map_or(0, |c| {
+            let char_offset = self
+                .resolve_picture_control_ref(section_idx, parent_para_idx, control_idx)?
+                .caption
+                .as_ref()
+                .map_or(0, |c| {
                     c.paragraphs.first().map_or(0, |p| p.text.chars().count())
-                }),
-                _ => 0,
-            };
+                });
             Ok(format!(
                 "{{\"ok\":true,\"captionCharOffset\":{}}}",
                 char_offset
@@ -615,18 +857,31 @@ impl DocumentCore {
             }
         }
 
-        // 자르기
-        if let Some(v) = json_i32(props_json, "cropLeft") {
-            pic.crop.left = v;
-        }
-        if let Some(v) = json_i32(props_json, "cropTop") {
-            pic.crop.top = v;
-        }
-        if let Some(v) = json_i32(props_json, "cropRight") {
-            pic.crop.right = v;
-        }
-        if let Some(v) = json_i32(props_json, "cropBottom") {
-            pic.crop.bottom = v;
+        // 자르기: HWP 내부 crop은 원본 이미지의 source rect 좌표이고,
+        // 속성 창 UI는 네 방향에서 잘라낸 양을 표시한다.
+        let crop_left = json_i32(props_json, "cropLeft");
+        let crop_top = json_i32(props_json, "cropTop");
+        let crop_right = json_i32(props_json, "cropRight");
+        let crop_bottom = json_i32(props_json, "cropBottom");
+        if crop_left.is_some()
+            || crop_top.is_some()
+            || crop_right.is_some()
+            || crop_bottom.is_some()
+        {
+            let (mut left, mut top, mut right, mut bottom) = Self::picture_crop_ui_amounts(pic);
+            if let Some(v) = crop_left {
+                left = v;
+            }
+            if let Some(v) = crop_top {
+                top = v;
+            }
+            if let Some(v) = crop_right {
+                right = v;
+            }
+            if let Some(v) = crop_bottom {
+                bottom = v;
+            }
+            Self::set_picture_crop_from_ui_amounts(pic, left, top, right, bottom);
         }
 
         // 안쪽 여백 (그림 여백)
@@ -2012,7 +2267,10 @@ impl DocumentCore {
              \"vertRelTo\":\"{}\",\"vertAlign\":\"{}\",\
              \"horzRelTo\":\"{}\",\"horzAlign\":\"{}\",\
              \"vertOffset\":{},\"horzOffset\":{},\
-             \"textWrap\":\"{}\",\"zOrder\":{},\"instanceId\":{},\"description\":\"{}\"",
+             \"textWrap\":\"{}\",\"zOrder\":{},\"instanceId\":{},\
+             \"outerMarginLeft\":{},\"outerMarginTop\":{},\
+             \"outerMarginRight\":{},\"outerMarginBottom\":{},\
+             \"description\":\"{}\"",
             c.width,
             c.height,
             c.treat_as_char,
@@ -2025,6 +2283,10 @@ impl DocumentCore {
             text_wrap,
             c.z_order,
             c.instance_id,
+            c.margin.left,
+            c.margin.top,
+            c.margin.right,
+            c.margin.bottom,
             desc_escaped,
         )
     }
@@ -2034,7 +2296,7 @@ impl DocumentCore {
         c: &mut crate::model::shape::CommonObjAttr,
         props_json: &str,
     ) {
-        use super::super::helpers::{json_bool, json_str, json_u32};
+        use super::super::helpers::{json_bool, json_i16, json_str, json_u32};
 
         if let Some(w) = json_u32(props_json, "width") {
             c.width = w.max(MIN_SHAPE_SIZE);
@@ -2103,6 +2365,18 @@ impl DocumentCore {
         if let Some(v) = json_str(props_json, "description") {
             c.description = v;
         }
+        if let Some(v) = json_i16(props_json, "outerMarginLeft") {
+            c.margin.left = v;
+        }
+        if let Some(v) = json_i16(props_json, "outerMarginTop") {
+            c.margin.top = v;
+        }
+        if let Some(v) = json_i16(props_json, "outerMarginRight") {
+            c.margin.right = v;
+        }
+        if let Some(v) = json_i16(props_json, "outerMarginBottom") {
+            c.margin.bottom = v;
+        }
     }
 
     /// 글상자(Shape) 속성 조회 (네이티브).
@@ -2112,24 +2386,7 @@ impl DocumentCore {
         parent_para_idx: usize,
         control_idx: usize,
     ) -> Result<String, HwpError> {
-        let section = self.document.sections.get(section_idx).ok_or_else(|| {
-            HwpError::RenderError(format!("구역 인덱스 {} 범위 초과", section_idx))
-        })?;
-        let para = section.paragraphs.get(parent_para_idx).ok_or_else(|| {
-            HwpError::RenderError(format!("문단 인덱스 {} 범위 초과", parent_para_idx))
-        })?;
-        let ctrl = para.controls.get(control_idx).ok_or_else(|| {
-            HwpError::RenderError(format!("컨트롤 인덱스 {} 범위 초과", control_idx))
-        })?;
-
-        let shape = match ctrl {
-            Control::Shape(s) => s.as_ref(),
-            _ => {
-                return Err(HwpError::RenderError(
-                    "지정된 컨트롤이 Shape이 아닙니다".to_string(),
-                ))
-            }
-        };
+        let shape = self.resolve_shape_control_ref(section_idx, parent_para_idx, control_idx)?;
 
         let c = shape.common();
         let common_json = Self::common_obj_attr_to_json(c);
@@ -2256,24 +2513,7 @@ impl DocumentCore {
     ) -> Result<String, HwpError> {
         use super::super::helpers::{json_bool, json_i32, json_str};
 
-        let section = self.document.sections.get_mut(section_idx).ok_or_else(|| {
-            HwpError::RenderError(format!("구역 인덱스 {} 범위 초과", section_idx))
-        })?;
-        let para = section.paragraphs.get_mut(parent_para_idx).ok_or_else(|| {
-            HwpError::RenderError(format!("문단 인덱스 {} 범위 초과", parent_para_idx))
-        })?;
-        let ctrl = para.controls.get_mut(control_idx).ok_or_else(|| {
-            HwpError::RenderError(format!("컨트롤 인덱스 {} 범위 초과", control_idx))
-        })?;
-
-        let shape = match ctrl {
-            Control::Shape(s) => s.as_mut(),
-            _ => {
-                return Err(HwpError::RenderError(
-                    "지정된 컨트롤이 Shape이 아닙니다".to_string(),
-                ))
-            }
-        };
+        let shape = self.resolve_shape_control_mut(section_idx, parent_para_idx, control_idx)?;
 
         // CommonObjAttr 업데이트
         // 리사이즈 핸들을 반대편으로 끌어당길 때 studio가 width/height=0 을 보내
@@ -4881,58 +5121,108 @@ impl DocumentCore {
         }
     }
 
-    pub fn get_equation_properties_native(
+    fn find_note_equation_ref(
         &self,
+        kind: &str,
         section_idx: usize,
         parent_para_idx: usize,
-        control_idx: usize,
-        cell_idx: Option<usize>,
-        cell_para_idx: Option<usize>,
-    ) -> Result<String, HwpError> {
-        let eq = self.find_equation_ref(
-            section_idx,
-            parent_para_idx,
-            control_idx,
-            cell_idx,
-            cell_para_idx,
-        )?;
+        note_control_idx: usize,
+        note_para_idx: usize,
+        inner_control_idx: usize,
+    ) -> Result<&crate::model::control::Equation, HwpError> {
+        let section = self.document.sections.get(section_idx).ok_or_else(|| {
+            HwpError::RenderError(format!("구역 인덱스 {} 범위 초과", section_idx))
+        })?;
+        let para = section.paragraphs.get(parent_para_idx).ok_or_else(|| {
+            HwpError::RenderError(format!("문단 인덱스 {} 범위 초과", parent_para_idx))
+        })?;
+        let note_para = match para.controls.get(note_control_idx) {
+            Some(Control::Footnote(note)) if kind == "footnote" => {
+                note.paragraphs.get(note_para_idx)
+            }
+            Some(Control::Endnote(note)) if kind == "endnote" => note.paragraphs.get(note_para_idx),
+            _ => None,
+        }
+        .ok_or_else(|| {
+            HwpError::RenderError(format!(
+                "각주/미주 문단을 찾을 수 없습니다: kind={} sec={} para={} ctrl={} note_para={}",
+                kind, section_idx, parent_para_idx, note_control_idx, note_para_idx
+            ))
+        })?;
+        match note_para.controls.get(inner_control_idx) {
+            Some(Control::Equation(eq)) => Ok(eq),
+            _ => Err(HwpError::RenderError(format!(
+                "각주/미주 내부 컨트롤 {}은 수식이 아닙니다",
+                inner_control_idx
+            ))),
+        }
+    }
 
+    fn find_note_equation_mut(
+        &mut self,
+        kind: &str,
+        section_idx: usize,
+        parent_para_idx: usize,
+        note_control_idx: usize,
+        note_para_idx: usize,
+        inner_control_idx: usize,
+    ) -> Result<&mut crate::model::control::Equation, HwpError> {
+        let section = self.document.sections.get_mut(section_idx).ok_or_else(|| {
+            HwpError::RenderError(format!("구역 인덱스 {} 범위 초과", section_idx))
+        })?;
+        let para = section.paragraphs.get_mut(parent_para_idx).ok_or_else(|| {
+            HwpError::RenderError(format!("문단 인덱스 {} 범위 초과", parent_para_idx))
+        })?;
+        let note_para = match para.controls.get_mut(note_control_idx) {
+            Some(Control::Footnote(note)) if kind == "footnote" => {
+                note.paragraphs.get_mut(note_para_idx)
+            }
+            Some(Control::Endnote(note)) if kind == "endnote" => {
+                note.paragraphs.get_mut(note_para_idx)
+            }
+            _ => None,
+        }
+        .ok_or_else(|| {
+            HwpError::RenderError(format!(
+                "각주/미주 문단을 찾을 수 없습니다: kind={} sec={} para={} ctrl={} note_para={}",
+                kind, section_idx, parent_para_idx, note_control_idx, note_para_idx
+            ))
+        })?;
+        match note_para.controls.get_mut(inner_control_idx) {
+            Some(Control::Equation(eq)) => Ok(eq),
+            _ => Err(HwpError::RenderError(format!(
+                "각주/미주 내부 컨트롤 {}은 수식이 아닙니다",
+                inner_control_idx
+            ))),
+        }
+    }
+
+    fn equation_properties_json(eq: &crate::model::control::Equation) -> String {
+        let common_json = Self::common_obj_attr_to_json(&eq.common);
         let script_escaped = super::super::helpers::json_escape(&eq.script);
         let font_name_escaped = super::super::helpers::json_escape(&eq.font_name);
 
-        Ok(format!(
+        format!(
             concat!(
-                "{{\"script\":\"{}\",\"fontSize\":{},\"color\":{},",
-                "\"baseline\":{},\"fontName\":\"{}\"}}"
+                "{{{},\"script\":\"{}\",\"fontSize\":{},\"color\":{},",
+                "\"baseline\":{},\"fontName\":\"{}\",",
+                "\"hasCaption\":false,\"captionDirection\":\"None\",",
+                "\"captionWidth\":0,\"captionSpacing\":0}}"
             ),
-            script_escaped, eq.font_size, eq.color, eq.baseline, font_name_escaped,
-        ))
+            common_json, script_escaped, eq.font_size, eq.color, eq.baseline, font_name_escaped,
+        )
     }
 
-    /// 수식 컨트롤의 속성을 변경한다 (네이티브).
-    pub fn set_equation_properties_native(
-        &mut self,
-        section_idx: usize,
-        parent_para_idx: usize,
-        control_idx: usize,
-        cell_idx: Option<usize>,
-        cell_para_idx: Option<usize>,
+    fn apply_equation_properties(
+        eq: &mut crate::model::control::Equation,
+        dpi: f64,
         props_json: &str,
-    ) -> Result<String, HwpError> {
+    ) {
         use super::super::helpers::{json_i32, json_str, json_u32};
         use crate::renderer::equation::layout::EqLayout;
         use crate::renderer::equation::parser::EqParser;
         use crate::renderer::equation::tokenizer::tokenize;
         use crate::renderer::hwpunit_to_px;
-
-        let dpi = self.dpi;
-        let eq = self.find_equation_mut(
-            section_idx,
-            parent_para_idx,
-            control_idx,
-            cell_idx,
-            cell_para_idx,
-        )?;
 
         if let Some(s) = json_str(props_json, "script") {
             eq.script = s;
@@ -4949,8 +5239,8 @@ impl DocumentCore {
         if let Some(fn_) = json_str(props_json, "fontName") {
             eq.font_name = fn_;
         }
+        Self::apply_common_obj_attr_from_json(&mut eq.common, props_json);
 
-        // 수식 레이아웃 실행 → 개체 크기(common.width/height) 갱신
         let font_size_px = hwpunit_to_px(eq.font_size as i32, dpi);
         let tokens = tokenize(&eq.script);
         let ast = EqParser::new(tokens).parse();
@@ -4959,6 +5249,46 @@ impl DocumentCore {
         let new_h = crate::renderer::px_to_hwpunit(layout_box.height, dpi).max(0) as u32;
         eq.common.width = new_w;
         eq.common.height = new_h;
+    }
+
+    pub fn get_equation_properties_native(
+        &self,
+        section_idx: usize,
+        parent_para_idx: usize,
+        control_idx: usize,
+        cell_idx: Option<usize>,
+        cell_para_idx: Option<usize>,
+    ) -> Result<String, HwpError> {
+        let eq = self.find_equation_ref(
+            section_idx,
+            parent_para_idx,
+            control_idx,
+            cell_idx,
+            cell_para_idx,
+        )?;
+
+        Ok(Self::equation_properties_json(eq))
+    }
+
+    /// 수식 컨트롤의 속성을 변경한다 (네이티브).
+    pub fn set_equation_properties_native(
+        &mut self,
+        section_idx: usize,
+        parent_para_idx: usize,
+        control_idx: usize,
+        cell_idx: Option<usize>,
+        cell_para_idx: Option<usize>,
+        props_json: &str,
+    ) -> Result<String, HwpError> {
+        let dpi = self.dpi;
+        let eq = self.find_equation_mut(
+            section_idx,
+            parent_para_idx,
+            control_idx,
+            cell_idx,
+            cell_para_idx,
+        )?;
+        Self::apply_equation_properties(eq, dpi, props_json);
 
         // 표 셀 내 수식인 경우 표 dirty 플래그 설정
         if cell_idx.is_some() {
@@ -4972,6 +5302,55 @@ impl DocumentCore {
         }
 
         // 재조판
+        let section = &mut self.document.sections[section_idx];
+        section.raw_stream = None;
+        self.recompose_section(section_idx);
+        self.paginate_if_needed();
+
+        Ok(super::super::helpers::json_ok())
+    }
+
+    pub fn get_note_equation_properties_native(
+        &self,
+        kind: &str,
+        section_idx: usize,
+        parent_para_idx: usize,
+        note_control_idx: usize,
+        note_para_idx: usize,
+        inner_control_idx: usize,
+    ) -> Result<String, HwpError> {
+        let eq = self.find_note_equation_ref(
+            kind,
+            section_idx,
+            parent_para_idx,
+            note_control_idx,
+            note_para_idx,
+            inner_control_idx,
+        )?;
+        Ok(Self::equation_properties_json(eq))
+    }
+
+    pub fn set_note_equation_properties_native(
+        &mut self,
+        kind: &str,
+        section_idx: usize,
+        parent_para_idx: usize,
+        note_control_idx: usize,
+        note_para_idx: usize,
+        inner_control_idx: usize,
+        props_json: &str,
+    ) -> Result<String, HwpError> {
+        let dpi = self.dpi;
+        let eq = self.find_note_equation_mut(
+            kind,
+            section_idx,
+            parent_para_idx,
+            note_control_idx,
+            note_para_idx,
+            inner_control_idx,
+        )?;
+        Self::apply_equation_properties(eq, dpi, props_json);
+
         let section = &mut self.document.sections[section_idx];
         section.raw_stream = None;
         self.recompose_section(section_idx);
@@ -5110,6 +5489,339 @@ impl DocumentCore {
     }
 
     // ─── 각주 삽입/삭제 API ──────────────────────────────
+
+    fn footnote_shape_number_format_code(format: crate::model::footnote::NumberFormat) -> u8 {
+        use crate::model::footnote::NumberFormat;
+        match format {
+            NumberFormat::Digit => 0,
+            NumberFormat::CircledDigit => 1,
+            NumberFormat::UpperRoman => 2,
+            NumberFormat::LowerRoman => 3,
+            NumberFormat::UpperAlpha => 4,
+            NumberFormat::LowerAlpha => 5,
+            NumberFormat::CircledUpperAlpha => 6,
+            NumberFormat::CircledLowerAlpha => 7,
+            NumberFormat::HangulSyllable => 8,
+            NumberFormat::CircledHangulSyllable => 9,
+            NumberFormat::HangulJamo => 10,
+            NumberFormat::CircledHangulJamo => 11,
+            NumberFormat::HangulDigit => 12,
+            NumberFormat::HanjaDigit => 13,
+            NumberFormat::CircledHanjaDigit => 14,
+            NumberFormat::HanjaGapEul => 15,
+            NumberFormat::HanjaGapEulHanja => 16,
+            NumberFormat::FourSymbol => 17,
+            NumberFormat::UserChar => 18,
+        }
+    }
+
+    fn footnote_shape_number_format_from_str(
+        value: &str,
+        fallback: crate::model::footnote::NumberFormat,
+    ) -> crate::model::footnote::NumberFormat {
+        use crate::model::footnote::NumberFormat;
+        match value {
+            "digit" => NumberFormat::Digit,
+            "circledDigit" => NumberFormat::CircledDigit,
+            "upperRoman" => NumberFormat::UpperRoman,
+            "lowerRoman" => NumberFormat::LowerRoman,
+            "upperAlpha" => NumberFormat::UpperAlpha,
+            "lowerAlpha" => NumberFormat::LowerAlpha,
+            "circledUpperAlpha" => NumberFormat::CircledUpperAlpha,
+            "circledLowerAlpha" => NumberFormat::CircledLowerAlpha,
+            "hangulSyllable" => NumberFormat::HangulSyllable,
+            "circledHangulSyllable" => NumberFormat::CircledHangulSyllable,
+            "hangulJamo" => NumberFormat::HangulJamo,
+            "circledHangulJamo" => NumberFormat::CircledHangulJamo,
+            "hangulDigit" => NumberFormat::HangulDigit,
+            "hanjaDigit" => NumberFormat::HanjaDigit,
+            "circledHanjaDigit" => NumberFormat::CircledHanjaDigit,
+            "hanjaGapEul" => NumberFormat::HanjaGapEul,
+            "hanjaGapEulHanja" => NumberFormat::HanjaGapEulHanja,
+            "fourSymbol" => NumberFormat::FourSymbol,
+            "userChar" => NumberFormat::UserChar,
+            _ => fallback,
+        }
+    }
+
+    fn footnote_shape_number_format_name(
+        format: crate::model::footnote::NumberFormat,
+    ) -> &'static str {
+        use crate::model::footnote::NumberFormat;
+        match format {
+            NumberFormat::Digit => "digit",
+            NumberFormat::CircledDigit => "circledDigit",
+            NumberFormat::UpperRoman => "upperRoman",
+            NumberFormat::LowerRoman => "lowerRoman",
+            NumberFormat::UpperAlpha => "upperAlpha",
+            NumberFormat::LowerAlpha => "lowerAlpha",
+            NumberFormat::CircledUpperAlpha => "circledUpperAlpha",
+            NumberFormat::CircledLowerAlpha => "circledLowerAlpha",
+            NumberFormat::HangulSyllable => "hangulSyllable",
+            NumberFormat::CircledHangulSyllable => "circledHangulSyllable",
+            NumberFormat::HangulJamo => "hangulJamo",
+            NumberFormat::CircledHangulJamo => "circledHangulJamo",
+            NumberFormat::HangulDigit => "hangulDigit",
+            NumberFormat::HanjaDigit => "hanjaDigit",
+            NumberFormat::CircledHanjaDigit => "circledHanjaDigit",
+            NumberFormat::HanjaGapEul => "hanjaGapEul",
+            NumberFormat::HanjaGapEulHanja => "hanjaGapEulHanja",
+            NumberFormat::FourSymbol => "fourSymbol",
+            NumberFormat::UserChar => "userChar",
+        }
+    }
+
+    fn footnote_numbering_name(
+        numbering: crate::model::footnote::FootnoteNumbering,
+    ) -> &'static str {
+        use crate::model::footnote::FootnoteNumbering;
+        match numbering {
+            FootnoteNumbering::Continue => "continue",
+            FootnoteNumbering::RestartSection => "restartSection",
+            FootnoteNumbering::RestartPage => "restartPage",
+        }
+    }
+
+    fn footnote_numbering_from_str(
+        value: &str,
+        fallback: crate::model::footnote::FootnoteNumbering,
+    ) -> crate::model::footnote::FootnoteNumbering {
+        use crate::model::footnote::FootnoteNumbering;
+        match value {
+            "continue" => FootnoteNumbering::Continue,
+            "restartSection" => FootnoteNumbering::RestartSection,
+            "restartPage" => FootnoteNumbering::RestartPage,
+            _ => fallback,
+        }
+    }
+
+    fn footnote_placement_name(
+        placement: crate::model::footnote::FootnotePlacement,
+    ) -> &'static str {
+        use crate::model::footnote::FootnotePlacement;
+        match placement {
+            FootnotePlacement::EachColumn => "documentEnd",
+            FootnotePlacement::BelowText => "sectionEnd",
+            FootnotePlacement::RightColumn => "rightColumn",
+        }
+    }
+
+    fn footnote_placement_from_str(
+        value: &str,
+        fallback: crate::model::footnote::FootnotePlacement,
+    ) -> crate::model::footnote::FootnotePlacement {
+        use crate::model::footnote::FootnotePlacement;
+        match value {
+            "documentEnd" | "eachColumn" => FootnotePlacement::EachColumn,
+            "sectionEnd" | "belowText" => FootnotePlacement::BelowText,
+            "rightColumn" => FootnotePlacement::RightColumn,
+            _ => fallback,
+        }
+    }
+
+    fn encode_footnote_shape_attr(shape: &crate::model::footnote::FootnoteShape) -> u32 {
+        use crate::model::footnote::{FootnoteNumbering, FootnotePlacement};
+        let number_format = Self::footnote_shape_number_format_code(shape.number_format) as u32;
+        let placement_numbering_bits = match (shape.numbering, shape.placement) {
+            (FootnoteNumbering::RestartPage, _) | (_, FootnotePlacement::RightColumn) => 2,
+            (FootnoteNumbering::RestartSection, _) | (_, FootnotePlacement::BelowText) => 1,
+            _ => 0,
+        };
+        (shape.attr & !0x03ff) | number_format | ((placement_numbering_bits & 0x03) << 8)
+    }
+
+    fn first_char_or_nul(value: &str) -> char {
+        value.chars().next().unwrap_or('\0')
+    }
+
+    fn json_escape_note_char(ch: char) -> String {
+        if ch == '\0' {
+            String::new()
+        } else {
+            crate::document_core::helpers::json_escape(&ch.to_string())
+        }
+    }
+
+    fn hwpunit16_from_json(json: &str, key: &str) -> Option<i16> {
+        crate::document_core::helpers::json_i32(json, key)
+            .map(|v| v.clamp(i16::MIN as i32, i16::MAX as i32) as i16)
+    }
+
+    fn make_note_inner_paragraph(
+        number_type: crate::model::control::AutoNumberType,
+        number: u16,
+        format: u8,
+        prefix_char: char,
+        suffix_char: char,
+        default_char_shape_id: u32,
+        para_shape_id: u16,
+        style_id: u8,
+    ) -> crate::model::paragraph::Paragraph {
+        use crate::model::paragraph::{CharShapeRef, LineSeg, Paragraph};
+
+        let auto_num = crate::model::control::AutoNumber {
+            number_type,
+            format,
+            superscript: false,
+            number,
+            assigned_number: number,
+            user_symbol: '\0',
+            prefix_char,
+            suffix_char,
+        };
+
+        Paragraph {
+            text: "  ".to_string(),
+            char_count: 10,
+            char_count_msb: true,
+            control_mask: 1u32 << 0x12,
+            char_offsets: vec![0, 8],
+            para_shape_id,
+            style_id,
+            char_shapes: vec![CharShapeRef {
+                start_pos: 0,
+                char_shape_id: default_char_shape_id,
+            }],
+            controls: vec![crate::model::control::Control::AutoNumber(auto_num)],
+            line_segs: vec![LineSeg {
+                text_start: 0,
+                line_height: 1000,
+                text_height: 1000,
+                baseline_distance: 850,
+                line_spacing: 600,
+                segment_width: 0,
+                tag: 0x00060000,
+                ..Default::default()
+            }],
+            has_para_text: true,
+            ..Default::default()
+        }
+    }
+
+    fn endnote_style_defaults(&self, section_idx: usize, para_idx: usize) -> (u32, u16, u8) {
+        let section = &self.document.sections[section_idx];
+
+        for para in &section.paragraphs {
+            for ctrl in &para.controls {
+                if let Control::Endnote(en) = ctrl {
+                    if let Some(ep) = en.paragraphs.first() {
+                        let char_shape_id = ep
+                            .char_shapes
+                            .first()
+                            .map(|cs| cs.char_shape_id)
+                            .unwrap_or(0);
+                        return (char_shape_id, ep.para_shape_id, ep.style_id);
+                    }
+                }
+            }
+        }
+
+        for (idx, style) in self.document.doc_info.styles.iter().enumerate() {
+            if style.local_name == "미주" || style.english_name.eq_ignore_ascii_case("Endnote") {
+                return (
+                    style.char_shape_id as u32,
+                    style.para_shape_id,
+                    idx.min(u8::MAX as usize) as u8,
+                );
+            }
+        }
+
+        let current_para = &section.paragraphs[para_idx];
+        (
+            current_para
+                .char_shapes
+                .first()
+                .map(|cs| cs.char_shape_id)
+                .unwrap_or(0),
+            current_para.para_shape_id,
+            current_para.style_id,
+        )
+    }
+
+    fn sync_endnote_control_with_shape(
+        endnote: &mut crate::model::footnote::Endnote,
+        number_format_code: u8,
+        prefix_char: char,
+        suffix_char: char,
+    ) {
+        use crate::model::control::{AutoNumberType, Control};
+
+        endnote.before_decoration_letter = if prefix_char == '\0' {
+            0
+        } else {
+            prefix_char as u16
+        };
+        endnote.after_decoration_letter = if suffix_char == '\0' {
+            0
+        } else {
+            suffix_char as u16
+        };
+        endnote.number_shape = number_format_code as u32;
+
+        for para in &mut endnote.paragraphs {
+            for ctrl in &mut para.controls {
+                if let Control::AutoNumber(auto_num) = ctrl {
+                    if auto_num.number_type == AutoNumberType::Endnote {
+                        auto_num.format = number_format_code;
+                        auto_num.prefix_char = prefix_char;
+                        auto_num.suffix_char = suffix_char;
+                        auto_num.number = endnote.number;
+                        auto_num.assigned_number = endnote.number;
+                    }
+                }
+            }
+        }
+    }
+
+    fn renumber_paragraph_endnotes_with_shape(
+        paragraphs: &mut [crate::model::paragraph::Paragraph],
+        next_number: &mut u16,
+        number_format_code: u8,
+        prefix_char: char,
+        suffix_char: char,
+    ) {
+        for para in paragraphs {
+            for ctrl in &mut para.controls {
+                match ctrl {
+                    Control::Endnote(endnote) => {
+                        endnote.number = *next_number;
+                        Self::sync_endnote_control_with_shape(
+                            endnote,
+                            number_format_code,
+                            prefix_char,
+                            suffix_char,
+                        );
+                        *next_number = next_number.saturating_add(1);
+                    }
+                    Control::Table(table) => {
+                        for cell in &mut table.cells {
+                            Self::renumber_paragraph_endnotes_with_shape(
+                                &mut cell.paragraphs,
+                                next_number,
+                                number_format_code,
+                                prefix_char,
+                                suffix_char,
+                            );
+                        }
+                    }
+                    Control::Shape(shape) => {
+                        if let Some(text_box) =
+                            shape.drawing_mut().and_then(|d| d.text_box.as_mut())
+                        {
+                            Self::renumber_paragraph_endnotes_with_shape(
+                                &mut text_box.paragraphs,
+                                next_number,
+                                number_format_code,
+                                prefix_char,
+                                suffix_char,
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
 
     /// 각주를 삽입한다.
     /// 커서 위치에 각주 컨트롤을 추가하고 빈 문단 1개를 생성한다.
@@ -5426,6 +6138,332 @@ impl DocumentCore {
             "{{\"ok\":true,\"paraIdx\":{},\"controlIdx\":{},\"footnoteNumber\":{}}}",
             para_idx, insert_idx, footnote_number
         ))
+    }
+
+    /// 미주를 삽입한다.
+    /// 커서 위치에 미주 컨트롤을 추가하고 빈 미주 문단 1개를 생성한다.
+    /// 반환: JSON `{"ok":true, "paraIdx":N, "controlIdx":N, "endnoteNumber":N}`
+    pub fn insert_endnote_native(
+        &mut self,
+        section_idx: usize,
+        para_idx: usize,
+        char_offset: usize,
+    ) -> Result<String, HwpError> {
+        use crate::model::footnote::Endnote;
+
+        if section_idx >= self.document.sections.len() {
+            return Err(HwpError::RenderError(format!(
+                "구역 인덱스 {} 범위 초과",
+                section_idx
+            )));
+        }
+        if para_idx >= self.document.sections[section_idx].paragraphs.len() {
+            return Err(HwpError::RenderError(format!(
+                "문단 인덱스 {} 범위 초과",
+                para_idx
+            )));
+        }
+
+        let shape = self.document.sections[section_idx]
+            .section_def
+            .endnote_shape
+            .clone();
+        let start_number = shape.start_number.max(1);
+        let number_format_code = Self::footnote_shape_number_format_code(shape.number_format);
+        let endnote_number = {
+            let mut count = 0u16;
+            let section = &self.document.sections[section_idx];
+            for (pi, para) in section.paragraphs.iter().enumerate() {
+                let is_before = pi < para_idx;
+                let is_same = pi == para_idx;
+                for (ci, ctrl) in para.controls.iter().enumerate() {
+                    match ctrl {
+                        Control::Endnote(_) => {
+                            if is_before {
+                                count += 1;
+                            } else if is_same {
+                                let positions =
+                                    crate::document_core::helpers::find_control_text_positions(
+                                        para,
+                                    );
+                                let pos = positions.get(ci).copied().unwrap_or(usize::MAX);
+                                if pos <= char_offset {
+                                    count += 1;
+                                }
+                            }
+                        }
+                        Control::Table(table) if is_before || is_same => {
+                            for cell in &table.cells {
+                                for cp in &cell.paragraphs {
+                                    count +=
+                                        cp.controls
+                                            .iter()
+                                            .filter(|c| matches!(c, Control::Endnote(_)))
+                                            .count() as u16;
+                                }
+                            }
+                        }
+                        Control::Shape(shape) if is_before || is_same => {
+                            if let Some(text_box) =
+                                shape.drawing().and_then(|d| d.text_box.as_ref())
+                            {
+                                for tp in &text_box.paragraphs {
+                                    count +=
+                                        tp.controls
+                                            .iter()
+                                            .filter(|c| matches!(c, Control::Endnote(_)))
+                                            .count() as u16;
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            start_number.saturating_add(count)
+        };
+
+        let (default_char_shape_id, para_shape_id, style_id) =
+            self.endnote_style_defaults(section_idx, para_idx);
+        let prefix_char = if shape.prefix_char == '\0' {
+            '\0'
+        } else {
+            shape.prefix_char
+        };
+        let suffix_char = if shape.suffix_char == '\0' {
+            ')'
+        } else {
+            shape.suffix_char
+        };
+
+        let inner_para = Self::make_note_inner_paragraph(
+            crate::model::control::AutoNumberType::Endnote,
+            endnote_number,
+            number_format_code,
+            prefix_char,
+            suffix_char,
+            default_char_shape_id,
+            para_shape_id,
+            style_id,
+        );
+
+        let endnote = Endnote {
+            number: endnote_number,
+            paragraphs: vec![inner_para],
+            before_decoration_letter: prefix_char as u16,
+            after_decoration_letter: suffix_char as u16,
+            number_shape: number_format_code as u32,
+            ..Default::default()
+        };
+
+        self.document.sections[section_idx].raw_stream = None;
+        let paragraph = &mut self.document.sections[section_idx].paragraphs[para_idx];
+
+        let insert_idx = {
+            let positions = crate::document_core::helpers::find_control_text_positions(paragraph);
+            let mut idx = paragraph.controls.len();
+            for (i, &pos) in positions.iter().enumerate() {
+                if pos > char_offset {
+                    idx = i;
+                    break;
+                }
+            }
+            idx
+        };
+
+        paragraph
+            .controls
+            .insert(insert_idx, Control::Endnote(Box::new(endnote)));
+        paragraph.ctrl_data_records.insert(insert_idx, None);
+
+        if !paragraph.char_offsets.is_empty() {
+            let text_len = paragraph.text.chars().count();
+            let safe_offset = char_offset.min(text_len);
+            for co in paragraph.char_offsets[safe_offset..].iter_mut() {
+                *co += 8;
+            }
+        }
+        paragraph.char_count += 8;
+        paragraph.control_mask |= 1u32 << 0x0011;
+        paragraph.has_para_text = true;
+
+        let mut next_number = start_number;
+        Self::renumber_paragraph_endnotes_with_shape(
+            &mut self.document.sections[section_idx].paragraphs,
+            &mut next_number,
+            number_format_code,
+            prefix_char,
+            suffix_char,
+        );
+
+        self.reflow_footnote_paragraph(section_idx, para_idx, insert_idx, 0);
+
+        {
+            use crate::renderer::composer::reflow_line_segs;
+            use crate::renderer::hwpunit_to_px;
+            let page_def = &self.document.sections[section_idx].section_def.page_def;
+            let text_width =
+                page_def.width as i32 - page_def.margin_left as i32 - page_def.margin_right as i32;
+            let available_width = hwpunit_to_px(text_width, self.dpi);
+            let para_style = self.styles.para_styles.get(
+                self.document.sections[section_idx].paragraphs[para_idx].para_shape_id as usize,
+            );
+            let margin_left = para_style.map(|s| s.margin_left).unwrap_or(0.0);
+            let margin_right = para_style.map(|s| s.margin_right).unwrap_or(0.0);
+            let final_width = (available_width - margin_left - margin_right).max(0.0);
+            let body_para = &mut self.document.sections[section_idx].paragraphs[para_idx];
+            reflow_line_segs(body_para, final_width, &self.styles, self.dpi);
+        }
+
+        self.recompose_section(section_idx);
+        self.paginate_if_needed();
+        self.invalidate_page_tree_cache();
+
+        self.event_log.push(DocumentEvent::PictureInserted {
+            section: section_idx,
+            para: para_idx,
+        });
+        Ok(format!(
+            "{{\"ok\":true,\"paraIdx\":{},\"controlIdx\":{},\"endnoteNumber\":{}}}",
+            para_idx, insert_idx, endnote_number
+        ))
+    }
+
+    /// 현재 구역의 미주 모양을 조회한다.
+    pub fn get_endnote_shape_native(&self, section_idx: usize) -> Result<String, HwpError> {
+        let section = self.document.sections.get(section_idx).ok_or_else(|| {
+            HwpError::RenderError(format!("구역 인덱스 {} 범위 초과", section_idx))
+        })?;
+        let shape = &section.section_def.endnote_shape;
+        let separator_enabled = shape.separator_length != 0
+            || shape.separator_line_type != 0
+            || shape.separator_line_width != 0;
+        let separator_color =
+            crate::document_core::helpers::clipboard_color_to_css(shape.separator_color);
+
+        Ok(format!(
+            concat!(
+                "{{\"ok\":true,",
+                "\"numberFormat\":\"{}\",",
+                "\"userChar\":\"{}\",",
+                "\"prefixChar\":\"{}\",",
+                "\"suffixChar\":\"{}\",",
+                "\"startNumber\":{},",
+                "\"separatorEnabled\":{},",
+                "\"separatorLength\":{},",
+                "\"separatorMarginTop\":{},",
+                "\"separatorMarginBottom\":{},",
+                "\"noteSpacing\":{},",
+                "\"separatorLineType\":{},",
+                "\"separatorLineWidth\":{},",
+                "\"separatorColor\":\"{}\",",
+                "\"numbering\":\"{}\",",
+                "\"placement\":\"{}\"",
+                "}}"
+            ),
+            Self::footnote_shape_number_format_name(shape.number_format),
+            Self::json_escape_note_char(shape.user_char),
+            Self::json_escape_note_char(shape.prefix_char),
+            Self::json_escape_note_char(shape.suffix_char),
+            shape.start_number,
+            if separator_enabled { "true" } else { "false" },
+            shape.separator_length,
+            shape.separator_margin_top,
+            if shape.note_spacing != 0 {
+                shape.note_spacing
+            } else {
+                shape.separator_margin_bottom
+            },
+            shape.raw_unknown,
+            shape.separator_line_type,
+            shape.separator_line_width,
+            separator_color,
+            Self::footnote_numbering_name(shape.numbering),
+            Self::footnote_placement_name(shape.placement),
+        ))
+    }
+
+    /// 현재 구역의 미주 모양을 적용한다.
+    pub fn apply_endnote_shape_native(
+        &mut self,
+        section_idx: usize,
+        props_json: &str,
+    ) -> Result<String, HwpError> {
+        let section = self.document.sections.get_mut(section_idx).ok_or_else(|| {
+            HwpError::RenderError(format!("구역 인덱스 {} 범위 초과", section_idx))
+        })?;
+        let shape = &mut section.section_def.endnote_shape;
+
+        if let Some(v) = crate::document_core::helpers::json_str(props_json, "numberFormat") {
+            shape.number_format =
+                Self::footnote_shape_number_format_from_str(&v, shape.number_format);
+        }
+        if let Some(v) = crate::document_core::helpers::json_str(props_json, "userChar") {
+            shape.user_char = Self::first_char_or_nul(&v);
+        }
+        if let Some(v) = crate::document_core::helpers::json_str(props_json, "prefixChar") {
+            shape.prefix_char = Self::first_char_or_nul(&v);
+        }
+        if let Some(v) = crate::document_core::helpers::json_str(props_json, "suffixChar") {
+            shape.suffix_char = Self::first_char_or_nul(&v);
+        }
+        if let Some(v) = crate::document_core::helpers::json_u16(props_json, "startNumber") {
+            shape.start_number = v.max(1);
+        }
+        if let Some(v) = Self::hwpunit16_from_json(props_json, "separatorLength") {
+            shape.separator_length = v.max(0);
+        }
+        if let Some(v) = Self::hwpunit16_from_json(props_json, "separatorMarginTop") {
+            shape.separator_margin_top = v.max(0);
+        }
+        if let Some(v) = Self::hwpunit16_from_json(props_json, "separatorMarginBottom") {
+            shape.note_spacing = v.max(0);
+        }
+        if let Some(v) = Self::hwpunit16_from_json(props_json, "noteSpacing") {
+            shape.raw_unknown = v.max(0) as u16;
+        }
+        if let Some(v) = crate::document_core::helpers::json_u8(props_json, "separatorLineType") {
+            shape.separator_line_type = v;
+        }
+        if let Some(v) = crate::document_core::helpers::json_u8(props_json, "separatorLineWidth") {
+            shape.separator_line_width = v;
+        }
+        if let Some(v) = crate::document_core::helpers::json_color(props_json, "separatorColor") {
+            shape.separator_color = v;
+        }
+        if let Some(v) = crate::document_core::helpers::json_str(props_json, "numbering") {
+            shape.numbering = Self::footnote_numbering_from_str(&v, shape.numbering);
+        }
+        if let Some(v) = crate::document_core::helpers::json_str(props_json, "placement") {
+            shape.placement = Self::footnote_placement_from_str(&v, shape.placement);
+        }
+        if let Some(false) =
+            crate::document_core::helpers::json_bool(props_json, "separatorEnabled")
+        {
+            shape.separator_length = 0;
+            shape.separator_line_type = 0;
+            shape.separator_line_width = 0;
+        }
+        shape.attr = Self::encode_footnote_shape_attr(shape);
+        let start_number = shape.start_number.max(1);
+        let number_format_code = Self::footnote_shape_number_format_code(shape.number_format);
+        let prefix_char = shape.prefix_char;
+        let suffix_char = shape.suffix_char;
+        let mut next_number = start_number;
+        Self::renumber_paragraph_endnotes_with_shape(
+            &mut section.paragraphs,
+            &mut next_number,
+            number_format_code,
+            prefix_char,
+            suffix_char,
+        );
+        section.raw_stream = None;
+
+        self.recompose_section(section_idx);
+        self.paginate_if_needed();
+        self.invalidate_page_tree_cache();
+
+        Ok(super::super::helpers::json_ok())
     }
 
     /// 본문 문단에 수식을 삽입한다 (표 셀/글상자 내부는 미지원).
