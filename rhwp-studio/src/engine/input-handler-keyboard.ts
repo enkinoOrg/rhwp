@@ -174,13 +174,21 @@ async function convertToPngBlob(data: Uint8Array, mime: string): Promise<Blob> {
   }
 }
 
+/** [Task #1161] 선택된 picture ref 의 cellPath 를 native cellPathJson 인자로 변환.
+ * 셀/글상자 밖 picture(본문)는 빈 문자열 → native 가 본문 경로로 처리. */
+export function pictureCellPathJson(
+  ref: { cellPath?: Array<{ controlIndex: number; cellIndex: number; cellParaIndex: number }> } | null,
+): string {
+  return ref && ref.cellPath && ref.cellPath.length > 0 ? JSON.stringify(ref.cellPath) : '';
+}
+
 /** 이미지 컨트롤의 바이너리를 포함하여 시스템 클립보드에 기록한다. */
 export async function writeImageToClipboard(
   wasm: WasmBridge, sec: number, ppi: number, ci: number,
-  text: string, html: string,
+  text: string, html: string, cellPathJson = '',
 ): Promise<void> {
-  const imageData = wasm.getControlImageData(sec, ppi, ci);
-  const mime = wasm.getControlImageMime(sec, ppi, ci);
+  const imageData = wasm.getControlImageData(sec, ppi, ci, cellPathJson);
+  const mime = wasm.getControlImageMime(sec, ppi, ci, cellPathJson);
   const pngBlob = await convertToPngBlob(imageData, mime);
   const item = new ClipboardItem({
     'text/plain': new Blob([text], { type: 'text/plain' }),
@@ -625,13 +633,14 @@ export function onKeyDown(this: any, e: KeyboardEvent): void {
       const ref = this.cursor.getSelectedPictureRef();
       if (ref) {
         try {
-          this.wasm.copyControl(ref.sec, ref.ppi, ref.ci);
+          const cellPathJson = pictureCellPathJson(ref);
+          this.wasm.copyControl(ref.sec, ref.ppi, ref.ci, cellPathJson);
           const text = this.wasm.getClipboardText() || '[그림]';
           let html = '';
-          try { html = this.wasm.exportControlHtml(ref.sec, ref.ppi, ref.ci) || ''; } catch { /* 무시 */ }
+          try { html = this.wasm.exportControlHtml(ref.sec, ref.ppi, ref.ci, cellPathJson) || ''; } catch { /* 무시 */ }
           const markedHtml = prepareRhwpInternalClipboardHtml(this, html, text);
           if (ref.type === 'image') {
-            writeImageToClipboard(this.wasm, ref.sec, ref.ppi, ref.ci, text, markedHtml)
+            writeImageToClipboard(this.wasm, ref.sec, ref.ppi, ref.ci, text, markedHtml, cellPathJson)
               .catch(() => navigator.clipboard.writeText(text).catch(() => {}));
           } else {
             writeTextHtmlToClipboard(text, markedHtml)
@@ -649,13 +658,14 @@ export function onKeyDown(this: any, e: KeyboardEvent): void {
       const ref = this.cursor.getSelectedPictureRef();
       if (ref) {
         try {
-          this.wasm.copyControl(ref.sec, ref.ppi, ref.ci);
+          const cellPathJson = pictureCellPathJson(ref);
+          this.wasm.copyControl(ref.sec, ref.ppi, ref.ci, cellPathJson);
           const text = this.wasm.getClipboardText() || '[그림]';
           let html = '';
-          try { html = this.wasm.exportControlHtml(ref.sec, ref.ppi, ref.ci) || ''; } catch { /* 무시 */ }
+          try { html = this.wasm.exportControlHtml(ref.sec, ref.ppi, ref.ci, cellPathJson) || ''; } catch { /* 무시 */ }
           const markedHtml = prepareRhwpInternalClipboardHtml(this, html, text);
           if (ref.type === 'image') {
-            writeImageToClipboard(this.wasm, ref.sec, ref.ppi, ref.ci, text, markedHtml)
+            writeImageToClipboard(this.wasm, ref.sec, ref.ppi, ref.ci, text, markedHtml, cellPathJson)
               .catch(() => navigator.clipboard.writeText(text).catch(() => {}));
           } else {
             writeTextHtmlToClipboard(text, markedHtml)
@@ -1271,10 +1281,11 @@ export function onCopy(this: any, e: ClipboardEvent): void {
     if (ref) {
       e.preventDefault();
       try {
-        this.wasm.copyControl(ref.sec, ref.ppi, ref.ci);
+        const cellPathJson = pictureCellPathJson(ref);
+        this.wasm.copyControl(ref.sec, ref.ppi, ref.ci, cellPathJson);
         const text = this.wasm.getClipboardText() || '[그림]';
         let html = '';
-        try { html = this.wasm.exportControlHtml(ref.sec, ref.ppi, ref.ci) || ''; } catch { /* HTML 내보내기 실패는 fallback */ }
+        try { html = this.wasm.exportControlHtml(ref.sec, ref.ppi, ref.ci, cellPathJson) || ''; } catch { /* HTML 내보내기 실패는 fallback */ }
         const markedHtml = prepareRhwpInternalClipboardHtml(this, html, text);
         if (e.clipboardData) {
           if (text) e.clipboardData.setData('text/plain', text);
@@ -1282,7 +1293,7 @@ export function onCopy(this: any, e: ClipboardEvent): void {
         }
         // 이미지 컨트롤이면 image/png Blob 포함 클립보드 기록
         if (ref.type === 'image') {
-          writeImageToClipboard(this.wasm, ref.sec, ref.ppi, ref.ci, text, markedHtml)
+          writeImageToClipboard(this.wasm, ref.sec, ref.ppi, ref.ci, text, markedHtml, cellPathJson)
             .catch(() => {});
         }
       } catch (err) {

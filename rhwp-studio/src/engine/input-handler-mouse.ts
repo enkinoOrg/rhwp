@@ -512,6 +512,7 @@ export function onClick(this: any, e: MouseEvent): void {
             picHit.cellIdx, picHit.cellParaIdx,
             (picHit as any).headerFooter,
             (picHit as any).outerTableControlIdx,
+            (picHit as any).cellPath,
           );
           this.active = true;
           this.caret.hide();
@@ -832,6 +833,7 @@ export function onClick(this: any, e: MouseEvent): void {
           picHit.sec, picHit.ppi, picHit.ci, picHit.type,
           picHit.cellIdx, picHit.cellParaIdx, (picHit as any).headerFooter,
           (picHit as any).outerTableControlIdx,
+          (picHit as any).cellPath,
         );
         this.active = true;
         this.caret.hide();

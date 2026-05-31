@@ -1204,24 +1204,26 @@ export class WasmBridge {
     return this.doc.getClipboardText();
   }
 
-  copyControl(sec: number, para: number, ci: number): string {
+  // [Task #1161] cellPathJson: 셀/글상자 안 picture 복사 시 다단계 경로
+  // (`[{controlIndex,cellIndex,cellParaIndex},...]`). 빈 문자열이면 본문.
+  copyControl(sec: number, para: number, ci: number, cellPathJson = ''): string {
     if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
-    return this.doc.copyControl(sec, para, ci);
+    return this.doc.copyControl(sec, para, cellPathJson, ci);
   }
 
-  exportControlHtml(sec: number, para: number, ci: number): string {
+  exportControlHtml(sec: number, para: number, ci: number, cellPathJson = ''): string {
     if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
-    return this.doc.exportControlHtml(sec, para, ci);
+    return this.doc.exportControlHtml(sec, para, cellPathJson, ci);
   }
 
-  getControlImageData(sec: number, para: number, ci: number): Uint8Array {
+  getControlImageData(sec: number, para: number, ci: number, cellPathJson = ''): Uint8Array {
     if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
-    return this.doc.getControlImageData(sec, para, ci);
+    return this.doc.getControlImageData(sec, para, cellPathJson, ci);
   }
 
-  getControlImageMime(sec: number, para: number, ci: number): string {
+  getControlImageMime(sec: number, para: number, ci: number, cellPathJson = ''): string {
     if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
-    return this.doc.getControlImageMime(sec, para, ci);
+    return this.doc.getControlImageMime(sec, para, cellPathJson, ci);
   }
 
   clipboardHasControl(): boolean {
