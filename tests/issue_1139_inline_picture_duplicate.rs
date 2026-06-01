@@ -981,7 +981,7 @@ fn issue_1189_2022_nov_page17_internal_rewind_keeps_formula_tail_on_next_page() 
     collect_equation_bboxes_containing(&tree.root, "CQRT", &mut cqrt_lines);
     let cqrt_line = cqrt_lines
         .into_iter()
-        .find(|bbox| bbox.x > 400.0 && bbox.y > 430.0 && bbox.y < 460.0)
+        .find(|bbox| bbox.x > 400.0 && bbox.y > 440.0 && bbox.y < 500.0)
         .expect("문28 CQRT line");
     let mut g_theta_candidates = Vec::new();
     collect_equation_bboxes_containing(&tree.root, ">g</text>", &mut g_theta_candidates);
@@ -996,6 +996,57 @@ fn issue_1189_2022_nov_page17_internal_rewind_keeps_formula_tail_on_next_page() 
     assert!(
         (g_theta.y - cqrt_line.y).abs() < 2.0 && cqrt_line.x > g_theta.x,
         "문28의 g(theta)와 =□CQRT-△CST는 같은 줄에서 좌→우로 이어져야 함: g={g_theta:?}, cqrt={cqrt_line:?}"
+    );
+}
+
+#[test]
+fn issue_1209_2022_nov_page17_split_endnote_titles_keep_hancom_gap() {
+    let bytes = std::fs::read("samples/3-11월_실전_통합_2022.hwp").expect("sample");
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse");
+
+    let tree = doc.build_page_render_tree(16).expect("page 17 render tree");
+    let question27_y = min_para_text_y(&tree.root, 787).expect("문27 title");
+    let question28_y = min_para_text_y(&tree.root, 801).expect("문28 title");
+
+    assert!(
+        (240.0..256.0).contains(&question27_y),
+        "17쪽 왼쪽 단 문27 제목은 앞쪽에서 이어진 미주 본문 뒤 한컴/PDF 간격을 유지해야 함: y={question27_y}"
+    );
+    assert!(
+        (204.0..216.0).contains(&question28_y),
+        "17쪽 오른쪽 단 문28 제목도 앞쪽에서 이어진 미주 본문 뒤 한컴/PDF 간격을 유지해야 함: y={question28_y}"
+    );
+}
+
+#[test]
+fn issue_1209_2022_nov_page14_question22_keeps_hancom_endnote_gap() {
+    let bytes = std::fs::read("samples/3-11월_실전_통합_2022.hwp").expect("sample");
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse");
+
+    let page14 = doc.dump_page_items(Some(13));
+    assert!(
+        page14.contains("FullParagraph[미주]  pi=631")
+            && page14.contains("FullParagraph[미주]  pi=632"),
+        "14쪽 문22 앞뒤 미주 문단이 같은 왼쪽 단 흐름에 있어야 함\n{page14}"
+    );
+
+    let tree = doc.build_page_render_tree(13).expect("page 14 render tree");
+    let prev_bottom = max_para_content_bottom(&tree.root, 631).expect("문21 tail content");
+    let question22_y = min_para_text_y(&tree.root, 632).expect("문22 title");
+    let gap = question22_y - prev_bottom;
+
+    assert!(
+        (22.0..34.0).contains(&gap),
+        "14쪽 문22 시작 전에는 한컴/PDF 기준 미주 사이 간격이 보존되어야 함: prev_bottom={prev_bottom}, question22_y={question22_y}, gap={gap}"
+    );
+
+    let question22_tail_bottom = max_para_content_bottom(&tree.root, 643).expect("문22 tail");
+    let question23_y = min_para_text_y(&tree.root, 644).expect("문23 title");
+    let question23_gap = question23_y - question22_tail_bottom;
+
+    assert!(
+        (20.0..34.0).contains(&question23_gap),
+        "빈 spacer 뒤 문23 제목도 한컴/PDF 기준 미주 사이 간격을 유지해야 함: tail_bottom={question22_tail_bottom}, question23_y={question23_y}, gap={question23_gap}"
     );
 }
 

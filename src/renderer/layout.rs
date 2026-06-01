@@ -2624,6 +2624,8 @@ impl LayoutEngine {
         let col_width_hu = (col_area.width / self.dpi * 7200.0).round() as i32;
         let mut prev_tac_seg_applied = false;
         let mut tac_seg_applied_para: Option<usize> = None;
+        let mut prev_item_was_continued_partial = false;
+        let mut prev_continued_partial_end_gap_px = 0.0;
 
         // 고정값 줄간격 TAC 표 병행 (Task #9): 표 하단 비교용
         let mut fix_table_start_y: f64 = 0.0;
@@ -2809,12 +2811,34 @@ impl LayoutEngine {
                 }
             }
 
+            let current_is_endnote_question_title = col_content.endnote_flow
+                && paragraphs
+                    .get(item_para)
+                    .map(|p| p.text.trim_start().starts_with('문'))
+                    .unwrap_or(false);
+            let y_before_vpos = y_offset;
             if !shape_jumped && !prev_tac_seg_applied {
                 // [Task #1027 Stage C] inter-item VPOS_CORR 보정을 HeightCursor 에 위임 (동작 동일).
                 // 이전 문단 overlay-shape/분할표 bypass, page/lazy base 산출, sb 차감,
                 // ≤8px 백워드 클램프를 모두 캡슐화 (Stage A/B 함수 결합). 렌더러·페이지네이터 공유.
                 y_offset = hcursor.vpos_adjust(y_offset, item_para, paragraphs, styles);
             } // !shape_jumped
+            if current_is_endnote_question_title
+                && prev_item_was_continued_partial
+                && prev_continued_partial_end_gap_px > 0.0
+            {
+                // Compact 미주에서 앞쪽 쪽/단에서 이어진 조각 뒤에 새 문제 제목이
+                // 오면, LINE_SEG의 절대 vpos가 현재 쪽 기준과 어긋나 미주 사이
+                // 간격이 사라질 수 있다. 이전 partial의 마지막 line_spacing을
+                // 공통 미주 사이 간격으로 보존하고, 후속 항목도 같은 기준을
+                // 따르도록 vpos base를 함께 이동한다.
+                let min_y = y_before_vpos + prev_continued_partial_end_gap_px;
+                if y_offset < min_y {
+                    let delta = min_y - y_offset;
+                    y_offset = min_y;
+                    hcursor.shift_vpos_base_for_rendered_delta(delta);
+                }
+            }
             let current_vpos_rewinds_from_prev = hcursor
                 .prev_layout_para
                 .and_then(|prev_pi| {
@@ -2830,10 +2854,23 @@ impl LayoutEngine {
                 })
                 .unwrap_or(false);
 
-            if matches!(
+            let next_is_endnote_question_title = col_content.endnote_flow
+                && col_content
+                    .items
+                    .get(item_ordinal + 1)
+                    .and_then(|next_item| match next_item {
+                        PageItem::FullParagraph { para_index }
+                        | PageItem::PartialParagraph { para_index, .. } => Some(*para_index),
+                        _ => None,
+                    })
+                    .and_then(|pi| paragraphs.get(pi))
+                    .map(|p| p.text.trim_start().starts_with('문'))
+                    .unwrap_or(false);
+            if (matches!(
                 item,
                 PageItem::PartialParagraph { start_line, .. } if *start_line > 0
-            ) || current_vpos_rewinds_from_prev
+            ) && !next_is_endnote_question_title)
+                || current_vpos_rewinds_from_prev
             {
                 // 이어지는 partial paragraph는 이전 쪽/단에서 시작한 문단의 나머지다.
                 // 다음 항목과의 간격은 원본 절대 vpos 차이가 아니라 현재 쪽의 순차 y를
@@ -2954,6 +2991,26 @@ impl LayoutEngine {
             prev_tac_seg_applied = was_tac || tac_seg_applied_para == Some(item_para);
             // [Task #991] 다음 반복의 vpos 보정용 — 직전 항목이 분할 표였는지 기록.
             hcursor.prev_item_was_partial_table = matches!(item, PageItem::PartialTable { .. });
+            if let PageItem::PartialParagraph {
+                para_index,
+                start_line,
+                end_line,
+            } = item
+            {
+                prev_item_was_continued_partial = *start_line > 0;
+                prev_continued_partial_end_gap_px = if *start_line > 0 {
+                    paragraphs
+                        .get(*para_index)
+                        .and_then(|p| p.line_segs.get(end_line.saturating_sub(1)))
+                        .map(|seg| hwpunit_to_px(seg.line_spacing.max(0), self.dpi))
+                        .unwrap_or(0.0)
+                } else {
+                    0.0
+                };
+            } else {
+                prev_item_was_continued_partial = false;
+                prev_continued_partial_end_gap_px = 0.0;
+            }
 
             // 고정값 줄간격 TAC 표 병행 (Task #9)
             if was_tac {
