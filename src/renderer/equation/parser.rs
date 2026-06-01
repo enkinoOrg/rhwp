@@ -370,7 +370,10 @@ impl EqParser {
 
         // LEFT-RIGHT 괄호
         if cu == "LEFT" {
-            return self.parse_left_right();
+            // ★ KeepGong fix: 구분기호 그룹(left|...right| 등) 뒤 첨자(^/_)를 그룹 전체에 부착.
+            //   기존엔 try_parse_scripts 를 안 거쳐 |x|^3 의 ^3 가 base 없는 고아 첨자가 됐다.
+            let node = self.parse_left_right();
+            return self.try_parse_scripts(node);
         }
 
         if cu == "RIGHT" {
