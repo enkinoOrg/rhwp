@@ -3227,6 +3227,29 @@ fn parse_shape_object(
                         }
                         polygon_points.push(crate::model::Point { x: px, y: py });
                     }
+                    // [#1200] curve 의 가변 꼭짓점이 `<hp:seg x1 y1 x2 y2>` (점-대-점 chain)
+                    // 으로 인코딩된 경우. `<hc:pt>` 미사용 curve 는 이 경로로 점을 채운다.
+                    // seg 는 제어점이 아닌 sampled 꼭짓점이므로 폴리라인(LineTo)으로 재구성:
+                    // 첫 seg 의 시작점 1회 + 각 seg 의 끝점.
+                    b"seg" => {
+                        let mut x1: i32 = 0;
+                        let mut y1: i32 = 0;
+                        let mut x2: i32 = 0;
+                        let mut y2: i32 = 0;
+                        for attr in ce.attributes().flatten() {
+                            match attr.key.as_ref() {
+                                b"x1" => x1 = parse_i32(&attr),
+                                b"y1" => y1 = parse_i32(&attr),
+                                b"x2" => x2 = parse_i32(&attr),
+                                b"y2" => y2 = parse_i32(&attr),
+                                _ => {}
+                            }
+                        }
+                        if polygon_points.is_empty() {
+                            polygon_points.push(crate::model::Point { x: x1, y: y1 });
+                        }
+                        polygon_points.push(crate::model::Point { x: x2, y: y2 });
+                    }
                     b"startPt" => {
                         for attr in ce.attributes().flatten() {
                             match attr.key.as_ref() {
@@ -5077,6 +5100,48 @@ mod tests {
             850
         );
         assert_eq!(section.section_def.endnote_shape.note_spacing, 567);
+    }
+
+    /// [#1200] curve 도형의 geometry 가 `<hp:seg x1 y1 x2 y2>` (점-대-점 chain)
+    /// 으로 인코딩된 경우 CurveShape.points 가 채워져야 한다. 누락 시 외곽선 미렌더.
+    #[test]
+    fn test_parse_curve_seg_populates_points() {
+        // seg chain: (10,10)->(90,10)->(90,90)->(10,10) (폐곡선)
+        let xml = r##"<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+        xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">
+  <hp:p paraPrIDRef="0" styleIDRef="0">
+    <hp:run charPrIDRef="0">
+      <hp:curve id="0" zOrder="0" numberingType="NONE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" href="" groupLevel="0" instid="1">
+        <hp:offset x="0" y="0"/>
+        <hp:orgSz width="100" height="100"/>
+        <hp:curSz width="100" height="100"/>
+        <hp:lineShape color="#000000" width="113" style="SOLID"/>
+        <hp:seg type="LINE" x1="10" y1="10" x2="90" y2="10"/>
+        <hp:seg type="LINE" x1="90" y1="10" x2="90" y2="90"/>
+        <hp:seg type="LINE" x1="90" y1="90" x2="10" y2="10"/>
+      </hp:curve>
+    </hp:run>
+  </hp:p>
+</hs:sec>"##;
+
+        let section = parse_hwpx_section(xml).unwrap();
+        let curve = section
+            .paragraphs
+            .iter()
+            .flat_map(|p| p.controls.iter())
+            .find_map(|c| match c {
+                Control::Shape(s) => match s.as_ref() {
+                    crate::model::shape::ShapeObject::Curve(cv) => Some(cv),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .expect("curve shape");
+
+        // 첫 seg 시작점 + 각 seg 끝점 = 4점 chain
+        let pts: Vec<(i32, i32)> = curve.points.iter().map(|p| (p.x, p.y)).collect();
+        assert_eq!(pts, vec![(10, 10), (90, 10), (90, 90), (10, 10)]);
     }
 
     #[test]
