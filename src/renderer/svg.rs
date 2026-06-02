@@ -3351,6 +3351,36 @@ fn known_font_filenames(font_name: &str) -> Vec<&'static str> {
     }
 }
 
+/// Task #1224: 한국어 고딕(돋움/고딕/굴림) 계열의 오픈소스 대체 폰트 파일명.
+///
+/// 한컴/MS 저작권 고딕(한컴돋움·Haansoft Dotum·맑은 고딕·돋움·굴림 등) 파일 부재 시
+/// 임베딩의 **최후 후보**로 사용한다. 현 폴백(Noto Sans CJK KR Regular)은 한컴 돋움보다
+/// 획이 +43% 두꺼워(페이지 밀도 0.378 vs 0.265) 본문이 과도하게 굵게 렌더되므로, 획 두께가
+/// 한컴 돋움에 근접한 Noto Sans KR ExtraLight(rsvg 페이지 밀도 0.277)로 교정한다
+/// (`ttfs/opensource/`).
+///
+/// serif(바탕/명조/궁서)·라틴 폰트에는 적용하지 않는다(시각 정합과 무관). 실제 저작권
+/// 폰트가 탐색 경로에 있으면 그쪽이 우선한다(대체는 탐색 경로 말단의 `ttfs/opensource/`).
+///
+/// 주의: 현 임베딩 subsetter(typst, PDF용)는 cmap 을 제거하므로 @font-face 임베딩은
+/// 브라우저 `<text>` 매핑에 무효. 본 대체의 실효 경로는 **폴백 체인 + fontconfig/웹폰트로
+/// 설치된 ExtraLight** 이다(Task #1224 보고서 참조).
+#[cfg(not(target_arch = "wasm32"))]
+fn korean_gothic_substitute(font_name: &str) -> Option<&'static str> {
+    let lower = font_name.to_ascii_lowercase();
+    let is_gothic = font_name.contains("돋움")
+        || font_name.contains("고딕")
+        || font_name.contains("굴림")
+        || lower.contains("dotum")
+        || lower.contains("gothic")
+        || lower.contains("gulim");
+    if is_gothic {
+        Some("NotoSansKR-ExtraLight.ttf")
+    } else {
+        None
+    }
+}
+
 /// 폰트명으로 TTF/OTF 파일을 탐색한다.
 #[cfg(not(target_arch = "wasm32"))]
 fn find_font_file(
@@ -3382,6 +3412,12 @@ fn find_font_file(
                 files.push(format!("{}.ttc", clean));
             }
         }
+        // Task #1224: 고딕 계열은 오픈소스 대체(Noto Sans KR ExtraLight)를 최후 후보로 추가.
+        // 실제 저작권 폰트가 앞선 탐색 경로에 있으면 그쪽이 우선하므로, 대체는
+        // 탐색 경로 말단(ttfs/opensource)에서만 매칭된다.
+        if let Some(sub) = korean_gothic_substitute(font_name) {
+            files.push(sub.to_string());
+        }
         files
     };
 
@@ -3410,6 +3446,9 @@ fn find_font_file(
     if Path::new("/mnt/c/Windows/Fonts").exists() {
         search_dirs.push(Path::new("/mnt/c/Windows/Fonts").to_path_buf());
     }
+    // Task #1224: 오픈소스 번들 대체 폰트 경로 — **최후 탐색**(실제 저작권/시스템 폰트가
+    // 항상 우선). 고딕 계열의 Noto Sans KR ExtraLight 대체가 여기서만 매칭된다.
+    search_dirs.push(Path::new("ttfs/opensource").to_path_buf());
 
     for dir in &search_dirs {
         if !dir.exists() {
