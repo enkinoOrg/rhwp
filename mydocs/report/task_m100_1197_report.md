@@ -63,11 +63,11 @@ git diff --check
 비고:
 
 - #1167 테스트는 기존 `LAYOUT_OVERFLOW` 진단 1건을 출력하지만 assertion은 통과했다.
-- 원본 `[2027] 온새미로 1 본교재.hwpx`와 PDF 정답지는 저장소 및 #1197 이슈 본문에 직접 첨부되어 있지 않아 원본 기반 export는 수행하지 못했다.
+- Stage 9에서 작업지시자 확인에 따라 재현 샘플 HWPX/HWP와 참조 PDF를 PR #1252에 포함했다.
 - 작업지시자 실서버 검증에서 드러난 `rhwp-studio` Canvas2D 소비자 누락은 Stage 6에서 보정했다.
 - Stage 6 후 `01`은 표시됐지만 중앙 배경 그림이 사라지는 문제가 남아, Stage 7에서 page background filtered canvas 를 추가했다.
 - Stage 7 후에도 `01`만 보이는 문제는 `front` overlay canvas 가 `#scroll-content canvas`의 흰 배경을 상속해 하위 layer 를 덮는 문제였고, Stage 8에서 overlay canvas 배경을 투명하게 고정했다.
-- 제공 PDF는 46쪽, rhwp pagination 은 47쪽으로 확인됐다. PDF 2쪽 `MEMO`는 rhwp 3쪽, PDF 3쪽 `01 / 1주차`는 rhwp 4쪽에 대응한다. 이 page count 차이는 별도 pagination/partial table 문제로 판단한다.
+- 제공 PDF는 46쪽, HWPX rhwp pagination 은 47쪽, HWP rhwp pagination 은 50쪽으로 확인됐다. PDF 2쪽 `MEMO`는 HWPX rhwp 3쪽, PDF 3쪽 `01 / 1주차`는 HWPX rhwp 4쪽에 대응한다. 이 page count 차이는 별도 pagination/partial table 문제로 판단한다.
 - 작업지시자 원본 시각검증에서 중앙 배경 이미지, `01` 전면 표기, 하단 `1주차` 및 설명 텍스트 표시를 확인했다.
 - Docker daemon 이 실행 중이 아니어서 Docker WASM 빌드는 수행하지 못했고, 로컬 `wasm-pack build --target web`로 `pkg/`를 갱신했다.
 
@@ -75,6 +75,9 @@ git diff --check
 
 작업지시자 확인용 산출물:
 
+- `samples/hwpx/[2027] 온새미로 1 본교재.hwpx`
+- `samples/hwpx/hancom-hwp/[2027] 온새미로 1 본교재.hwp`
+- `pdf-large/hwpx/[2027] 온새미로 1 본교재.pdf`
 - `output/poc/issue1197/visual_check.html`
 - `output/poc/issue1197/synthetic/issue1197_synthetic_zorder.svg`
 - `output/poc/issue1197/issue1167/복학원서.svg`
@@ -99,6 +102,7 @@ git diff --check
 Stage 8 커밋은 `rhwp-studio` overlay canvas 투명 배경 보정, Stage 8 완료보고서, orders/최종 보고서 갱신을 포함한다.
 마무리 커밋은 작업지시자 원본 시각검증 완료 상태를 최종 보고서와 orders 에 반영한다.
 PR 생성 기록 커밋은 PR #1252 생성 상태를 최종 보고서와 orders 에 반영한다.
+샘플 포함 커밋은 Stage 9 완료보고서와 HWPX/HWP/PDF 샘플 3종을 PR #1252에 반영한다.
 
 ## 6. 남은 결정
 
