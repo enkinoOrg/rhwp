@@ -136,6 +136,7 @@ test('PageRenderer uses filtered canvas layers for background, behind, and front
   assert.match(source, /createFilteredCanvasLayer\(pageIdx,\s*canvas,\s*renderScale,\s*'background'\)/);
   assert.match(source, /createFilteredCanvasLayer\(pageIdx,\s*canvas,\s*renderScale,\s*'behind'\)/);
   assert.match(source, /createFilteredCanvasLayer\(pageIdx,\s*canvas,\s*renderScale,\s*'front'\)/);
+  assert.match(source, /layer\.style\.background\s*=\s*'transparent'/);
   assert.match(source, /collectLayerPlaneSummary\(root,\s*summary,\s*null\)/);
 });
 

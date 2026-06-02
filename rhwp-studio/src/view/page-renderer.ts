@@ -167,6 +167,10 @@ export class PageRenderer {
     layer.height = sourceCanvas.height;
     layer.dataset.rhwpLayerKind = layerKind;
     layer.style.pointerEvents = 'none';
+    // Overlay canvas elements inherit #scroll-content canvas background unless
+    // this is explicit. A front layer with an opaque page background hides all
+    // lower background/behind layers.
+    layer.style.background = 'transparent';
     this.wasm.renderPageToCanvasFiltered(pageIdx, layer, renderScale, layerKind);
     return layer;
   }
