@@ -49,6 +49,17 @@ git diff --check
 wasm-pack build --target web
 ```
 
+PR 생성 직전 최신 `upstream/devel` rebase 후 추가로 통과한 명령:
+
+```sh
+cargo fmt --all -- --check
+cargo test
+cargo clippy -- -D warnings
+npm test
+npm run build
+git diff --check
+```
+
 비고:
 
 - #1167 테스트는 기존 `LAYOUT_OVERFLOW` 진단 1건을 출력하지만 assertion은 통과했다.
@@ -75,22 +86,24 @@ wasm-pack build --target web
 
 ## 5. 커밋
 
-- `9b330e71` Task #1197: add z-order red test
-- `7efb2528` Task #1197: add render layer metadata
-- `1628058d` Task #1197: stamp paper object layers
-- `58795584` Task #1197: replay layered paint order
-- `e56cc029` Task #1197: document final verification
-- `2b89333a` Task #1197: fix studio layer replay
-- `047db9e0` Task #1197: add studio background layer
-- `713fac99` Task #1197: keep studio overlays transparent
+- `44e77247` Task #1197: add z-order red test
+- `a4f33ff1` Task #1197: add render layer metadata
+- `114d6e30` Task #1197: stamp paper object layers
+- `55e406d7` Task #1197: replay layered paint order
+- `fbd482a3` Task #1197: document final verification
+- `b2917fe0` Task #1197: fix studio layer replay
+- `3e18f720` Task #1197: add studio background layer
+- `6ca5a42a` Task #1197: keep studio overlays transparent
+- `6252178f` Task #1197: finalize completion report
 
 Stage 8 커밋은 `rhwp-studio` overlay canvas 투명 배경 보정, Stage 8 완료보고서, orders/최종 보고서 갱신을 포함한다.
 마무리 커밋은 작업지시자 원본 시각검증 완료 상태를 최종 보고서와 orders 에 반영한다.
+PR 생성 기록 커밋은 PR #1252 생성 상태를 최종 보고서와 orders 에 반영한다.
 
 ## 6. 남은 결정
 
 현재 작업 범위는 완료했다. 다음 항목은 별도 승인 후 진행한다.
 
-- PR 생성
+- PR: [#1252](https://github.com/edwardkim/rhwp/pull/1252) (`postmelee:local/task1197` → `edwardkim/rhwp:devel`, Draft)
 - 작업지시자 승인 시 issue close
 - PDF 46쪽 vs rhwp 47쪽 page count 차이 별도 pagination 후속 이슈 처리
