@@ -77,14 +77,25 @@ Docker WASM 빌드 후 `pkg/` 산출물을 `rhwp-studio/public/`에 동기화했
 
 PR 본문이 명시한 것처럼 컬럼 하단 제목과 일부 mid-column 부분 갭은 본 PR 범위 밖이며 후속 #1257에서 다룬다.
 
-## 6. 최종 판단
+## 6. devel 병합 후 재검증
+
+`local/pr1259-current`를 `devel`에 `--no-ff`로 병합했다.
+
+| 항목 | 명령 | 결과 |
+|---|---|---|
+| Rust fmt | `cargo fmt --all --check` | 통과 |
+| 신규 height_cursor 테스트 | `cargo test compact_endnote_between_notes --lib` | 통과 |
+| #1256 통합 테스트 | `cargo test issue_1256_2022_sep_page10_question12_keeps_between_notes_gap --test issue_1139_inline_picture_duplicate` | 통과 |
+| Clippy | `cargo clippy --all-targets -- -D warnings` | 통과 |
+
+## 7. 최종 판단
 
 자동 검증, WASM/Studio build, 메인테이너 시각 판정이 모두 통과했으므로 PR #1259를 수용한다.
 
 남은 절차:
 
-1. `local/pr1259-current` 변경 커밋
-2. `devel` 병합
-3. `devel` 기준 검증 재확인
-4. `origin/devel` push
-5. PR #1259 및 이슈 #1256 종료 처리
+1. `local/pr1259-current` 변경 커밋 — 완료
+2. `devel` 병합 — 완료
+3. `devel` 기준 검증 재확인 — 완료
+4. `origin/devel` push — 진행 예정
+5. PR #1259 및 이슈 #1256 종료 처리 — 진행 예정
