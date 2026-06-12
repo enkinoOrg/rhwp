@@ -35,6 +35,8 @@ pub fn write_header(doc: &Document, ctx: &SerializeContext) -> Result<Vec<u8>, S
 
     // <hh:head> 루트 + 전체 네임스페이스 (parser가 기대하는 접두어 모두 선언)
     let sec_cnt = doc.doc_properties.section_count.max(1).to_string();
+    // HWPML 스키마 버전: 원본 보존값(문서별 상이, 1.2~1.5). 없으면 "1.2" 폴백.
+    let hwpml_version = doc.doc_info.hwpml_version.as_deref().unwrap_or("1.2");
     start_tag_attrs(
         &mut w,
         "hh:head",
@@ -63,7 +65,7 @@ pub fn write_header(doc: &Document, ctx: &SerializeContext) -> Result<Vec<u8>, S
                 "xmlns:config",
                 "urn:oasis:names:tc:opendocument:xmlns:config:1.0",
             ),
-            ("version", "1.2"),
+            ("version", hwpml_version),
             ("secCnt", &sec_cnt),
         ],
     )?;
@@ -1147,6 +1149,26 @@ mod tests {
         assert!(
             xml.contains(r#"xmlns:hwpunitchar="http://www.hancom.co.kr/hwpml/2016/HwpUnitChar""#),
             "hh:head 에 xmlns:hwpunitchar 선언이 있어야 함"
+        );
+        // [Finding 17] hwpml_version 미지정 시 "1.2" 폴백.
+        assert!(xml.contains(r#"version="1.2""#), "기본 버전 폴백은 1.2");
+    }
+
+    #[test]
+    fn write_header_emits_preserved_hwpml_version() {
+        // [Finding 17] 원본 HWPML 버전(문서별 상이, 예: 1.5)을 하드코딩 1.2 로
+        // 변질시키지 않고 그대로 재방출해야 한다.
+        let mut doc = Document::default();
+        doc.doc_info.hwpml_version = Some("1.5".to_string());
+        let ctx = SerializeContext::collect_from_document(&doc);
+        let xml = String::from_utf8(write_header(&doc, &ctx).expect("write_header")).unwrap();
+        assert!(
+            xml.contains(r#"version="1.5""#),
+            "보존된 hwpml_version=1.5 가 방출되어야 함"
+        );
+        assert!(
+            !xml.contains(r#"version="1.2""#),
+            "하드코딩 1.2 가 남아있으면 안 됨"
         );
     }
 

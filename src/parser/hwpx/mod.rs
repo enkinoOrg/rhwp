@@ -179,6 +179,8 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
     // 늘어나므로, 본 시점에 식별하여 page_def.margin_bottom 보정 (post-process)에 사용.
     let hwpml_version = header::parse_hwpx_hwpml_version(&header_xml);
     let is_hwp3_origin = hwpml_version.as_deref() == Some("1.4");
+    // 무손실: 원본 HWPML 버전을 보존해 직렬화 때 그대로 재방출(하드코딩 금지).
+    doc_info.hwpml_version = hwpml_version.clone();
 
     // BinData 목록을 DocInfo에 등록
     // [Task #873] isEmbeded="0" 인 외부 file 참조 (예: HWP3 → HWPX 변환본 의 절대 경로)

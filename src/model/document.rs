@@ -171,6 +171,10 @@ pub struct DocInfo {
     /// splice 해 무손실을 보장한다(content.hpf metadata 보존과 동일 전략).
     /// 원본 HWPX가 없으면(HWP5 경로 등) None → serializer가 하드코딩 폴백.
     pub hwpx_head_tail: Option<String>,
+    /// HWPX `<hh:head version="X.Y">` 의 HWPML 스키마 버전. 문서별로 다르므로
+    /// (1.2~1.5 등) 원본 값을 보존해 직렬화 때 그대로 재방출한다.
+    /// 원본 HWPX가 없으면 None → serializer가 "1.2" 폴백.
+    pub hwpml_version: Option<String>,
 }
 
 /// 본문의 구역 (Section)
