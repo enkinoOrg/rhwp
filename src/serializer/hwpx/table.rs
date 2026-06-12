@@ -581,6 +581,11 @@ mod tests {
             "캡션 내 autoNum 컨트롤이 방출되어야 함: {}",
             xml
         );
+        assert!(
+            xml.contains(r#"numType="PICTURE""#),
+            "그림 번호는 한컴 실물 표기 PICTURE 로 방출 — FIGURE 는 한컴 미인식(#1387 판정): {}",
+            xml
+        );
     }
 
     #[test]

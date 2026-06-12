@@ -53,10 +53,10 @@ serializer/게이트 한정, 렌더러·레이아웃·파서 무변경.
 
 ## 4. 관찰·귀속 (신규 이슈 아님)
 
-| 관찰 | 귀속 |
+| 관찰 | 귀속·처리 |
 |------|------|
 | 캡션 autoNum 슬롯 끝 방출 + 재파싱 끝 공백 1자 (ta-pic) | **#1382 발현** — 파서가 placeholder를 1유닛 적재 → `inferred_control_slot_count` mismatch. 본문 143E xfail과 동일 계열 |
-| autoNum `numType` PICTURE→FIGURE 역매핑 | 기존 serializer 전역 동작 (파서 양쪽 수용, IR 대칭) — 한컴 수용성은 본 판정에서 겸사 확인 |
+| autoNum `numType` FIGURE 방출 → 한컴 캡션 번호 미출력 | **본 타스크에서 정정** — 1차 한컴 판정(ta-pic 번호 미출력)으로 실증. FIGURE는 한컴 생산 파일 비실재(전수 sweep 0건, 실물은 PICTURE 표기). `auto_number_type_to_str` Picture→"PICTURE" 정정 + 테스트 단정 추가. 파서는 FIGURE/PICTURE 양쪽 수용 유지 |
 
 ## 5. 별도 이슈 제안 (승인 요청)
 
@@ -74,14 +74,14 @@ serializer/게이트 한정, 렌더러·레이아웃·파서 무변경.
 | MEMO subList / shapeComment 소실 | #1391 / #1392 |
 | 그림/도형 캡션 소실 | 신규 — 5절 등록 제안 |
 
-## 7. 한컴 판정 요청
+## 7. 한컴 판정
 
-`output/poc/task1387/`의 RT 2건을 한컴에디터에서 열어 판정 부탁드립니다:
+`output/poc/task1387/`의 RT 2건 (한컴에디터):
 
-1. **ta-pic-001-r.rt.hwpx** — 표 아래 캡션("&lt;그림 1&gt; 의정활동 모니터링 시스템 예시")
-   복원 여부. *기지 증상 안내: 캡션 번호(1)의 위치가 문장 끝으로 밀릴 수 있음(#1382),
-   셀 안 그림 크기 미반영(#1389) — 본 판정 범위 밖.*
-2. **mel-001.rt.hwpx** — 표 위 캡션("(단위 : 억원, %)", side=TOP) 복원 여부.
+1. **mel-001.rt.hwpx** — 표 위 캡션("(단위 : 억원, %)", side=TOP) **복원 성공** (1차 판정)
+2. **ta-pic-001-r.rt.hwpx** — 1차 판정: 캡션 본문 복원, **번호 미출력** → numType
+   FIGURE→PICTURE 정정 후 rt 재생성, **재판정 요청**. 판정 기준은 "번호 출력 여부" —
+   번호 위치가 문장 끝으로 밀리는 것은 #1382 기지(범위 밖), 셀 안 그림 크기는 #1389.
 
 ## 8. 산출물
 
