@@ -293,6 +293,12 @@ pub struct Numbering {
     pub start_number: u16,
     /// 수준별 시작 번호
     pub level_start_numbers: [u32; 7],
+    /// HWPX `<hh:numbering>` 의 자식 `<hh:paraHead>` 영역 원본 XML
+    /// (여는/닫는 태그 사이 그대로). 모델은 7수준만 표현하지만 HWPX 는
+    /// 10수준 + align/useInstWidth/autoIndent/checkable/형식문자열 등을
+    /// 가지므로, 무손실 라운드트립을 위해 원본 구간을 그대로 보존해 splice 한다.
+    /// HWP5 바이너리 경로 등 원본 XML 이 없으면 `None` → 하드코딩 폴백.
+    pub raw_para_heads: Option<String>,
 }
 
 /// 문단 머리 정보 (표 41)

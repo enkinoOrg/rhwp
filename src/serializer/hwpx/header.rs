@@ -789,6 +789,17 @@ fn write_numbering<W: Write>(
             ("start", &n.start_number.to_string()),
         ],
     )?;
+    // 원본 HWPX paraHead 영역이 있으면 그대로 splice(10수준 + align/
+    // useInstWidth/autoIndent/checkable/형식문자열 무손실 복원). 모델의 7수준
+    // NumberingHead 로는 표현 못하는 정보를 보존한다. 없으면(HWP5 경로 등)
+    // 아래 하드코딩 뼈대로 폴백.
+    if let Some(raw) = &n.raw_para_heads {
+        w.get_mut()
+            .write_all(raw.as_bytes())
+            .map_err(|e| SerializeError::XmlError(format!("numbering paraHead splice: {e}")))?;
+        end_tag(w, "hh:numbering")?;
+        return Ok(());
+    }
     // Stage 1: 10 레벨 paraHead 뼈대 출력. 실제 값은 NumberingHead 참조해 생성.
     for level in 0..10usize {
         let idx = level.min(6);
@@ -1696,5 +1707,39 @@ mod tests {
             xml[second_abs..].starts_with(r#"useFontSpace="0""#),
             "use_font_space=false → useFontSpace=\"0\": {xml}"
         );
+    }
+
+    #[test]
+    fn write_numbering_splices_raw_para_heads_verbatim() {
+        // Finding 21: 원본 paraHead 구간이 있으면 그대로 splice 되어, 모델의
+        // 7수준으로 표현 못하는 level 8 self-closing 까지 byte-exact 복원.
+        let inner = r##"<hh:paraHead start="1" level="1" numFormat="DIGIT" charPrIDRef="4294967295" checkable="0">^1.</hh:paraHead><hh:paraHead start="1" level="8" useInstWidth="0" charPrIDRef="0"/>"##;
+        let n = Numbering {
+            start_number: 0,
+            raw_para_heads: Some(inner.to_string()),
+            ..Numbering::default()
+        };
+
+        let mut writer = Writer::new(Vec::new());
+        write_numbering(&mut writer, 0, &n).unwrap();
+        let xml = String::from_utf8(writer.into_inner()).unwrap();
+
+        assert_eq!(
+            xml,
+            format!(r##"<hh:numbering id="1" start="0">{inner}</hh:numbering>"##)
+        );
+    }
+
+    #[test]
+    fn write_numbering_falls_back_to_skeleton_when_no_raw() {
+        // 원본 구간이 없으면(HWP5 경로 등) 10 레벨 하드코딩 뼈대로 폴백.
+        let n = Numbering::default();
+
+        let mut writer = Writer::new(Vec::new());
+        write_numbering(&mut writer, 0, &n).unwrap();
+        let xml = String::from_utf8(writer.into_inner()).unwrap();
+
+        assert_eq!(xml.matches("<hh:paraHead").count(), 10);
+        assert!(xml.starts_with(r#"<hh:numbering id="1" start="0">"#));
     }
 }

@@ -145,7 +145,7 @@ pub fn parse_hwpx_header(xml: &str) -> Result<(DocInfo, DocProperties), HwpxErro
                         parse_tab_def(e, &mut reader, &mut doc_info)?;
                     }
                     b"numbering" => {
-                        parse_numbering(e, &mut reader, &mut doc_info)?;
+                        parse_numbering(e, &mut reader, &mut doc_info, xml)?;
                     }
                     b"memoPr" => {
                         parse_memo_shape(e, &mut doc_info);
@@ -1732,6 +1732,7 @@ fn parse_numbering(
     e: &quick_xml::events::BytesStart,
     reader: &mut Reader<&[u8]>,
     doc_info: &mut DocInfo,
+    xml: &str,
 ) -> Result<(), HwpxError> {
     let mut num = Numbering::default();
 
@@ -1742,8 +1743,15 @@ fn parse_numbering(
     }
 
     if !is_empty_event(e) {
+        // 여는 태그 `<hh:numbering ...>` 직후 = 자식 paraHead 영역 시작 오프셋.
+        // reader 는 Reader::from_str(xml) 이므로 buffer_position 이 곧 xml 바이트
+        // 오프셋이다. 닫는 태그 직전 위치(이번 이터레이션 read 직전 오프셋)를
+        // 끝으로 잡아 닫는 태그 길이 계산 없이 byte-exact 구간을 얻는다.
+        let inner_start = reader.buffer_position() as usize;
+        let mut inner_end = inner_start;
         let mut buf = Vec::new();
         loop {
+            let pos_before = reader.buffer_position() as usize;
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Empty(ref ce)) => {
                     let cname = ce.name();
@@ -1766,14 +1774,24 @@ fn parse_numbering(
                 Ok(Event::End(ref ee)) => {
                     let ename = ee.name();
                     if local_name(ename.as_ref()) == b"numbering" {
+                        inner_end = pos_before;
                         break;
                     }
                 }
-                Ok(Event::Eof) => break,
+                Ok(Event::Eof) => {
+                    inner_end = pos_before;
+                    break;
+                }
                 Err(e) => return Err(HwpxError::XmlError(format!("numbering: {}", e))),
                 _ => {}
             }
             buf.clear();
+        }
+
+        // 무손실 splice 용 원본 paraHead 구간 보존(7수준 모델로 표현 못하는
+        // 8~10수준/checkable/형식문자열 포함). 경계가 깨졌으면 보존하지 않는다.
+        if inner_end >= inner_start && inner_end <= xml.len() {
+            num.raw_para_heads = Some(xml[inner_start..inner_end].to_string());
         }
     }
 
@@ -2070,6 +2088,24 @@ mod tests {
         assert_eq!(numbering.level_formats[0], "^1");
         assert_eq!(numbering.heads[0].number_format, 1);
         assert_eq!((numbering.heads[0].attr >> 5) & 0x0f, 1);
+    }
+
+    #[test]
+    fn numbering_raw_para_heads_captures_inner_verbatim_for_lossless_roundtrip() {
+        // Finding 21: 모델은 7수준만 표현하지만 HWPX 는 10수준 +
+        // align/useInstWidth/autoIndent/checkable/형식문자열을 가진다.
+        // 무손실 라운드트립을 위해 여는/닫는 태그 사이 원본 구간을 byte-exact
+        // 로 보존하는지 확인한다(level 7 checkable="1", level 8 self-closing 포함).
+        let inner = r##"<hh:paraHead start="1" level="1" align="LEFT" useInstWidth="1" autoIndent="1" widthAdjust="0" textOffsetType="PERCENT" textOffset="50" numFormat="DIGIT" charPrIDRef="4294967295" checkable="0">^1.</hh:paraHead><hh:paraHead start="1" level="7" align="LEFT" useInstWidth="1" autoIndent="1" widthAdjust="0" textOffsetType="PERCENT" textOffset="50" numFormat="CIRCLED_DIGIT" charPrIDRef="4294967295" checkable="1">^7</hh:paraHead><hh:paraHead start="1" level="8" align="LEFT" useInstWidth="0" autoIndent="0" widthAdjust="0" textOffsetType="PERCENT" textOffset="0" numFormat="DIGIT" charPrIDRef="0" checkable="0"/>"##;
+        let xml = format!(
+            r##"<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head"><hh:refList><hh:numberings itemCnt="1"><hh:numbering id="1" start="0">{inner}</hh:numbering></hh:numberings></hh:refList></hh:head>"##
+        );
+
+        let (doc_info, _) = parse_hwpx_header(&xml).unwrap();
+        assert_eq!(
+            doc_info.numberings[0].raw_para_heads.as_deref(),
+            Some(inner)
+        );
     }
 
     #[test]
