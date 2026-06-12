@@ -1378,14 +1378,44 @@ mod tests {
 
     #[test]
     fn write_border_fill_omits_fillbrush_when_none() {
-        // FillType::None 은 fillBrush 자체를 출력하지 않는다.
+        // FillType::None + solid 없음 = 원본에 fillBrush 부재 → 미출력.
         let bf = BorderFill::default();
         let mut writer = Writer::new(Vec::new());
         write_border_fill(&mut writer, 0, &bf).expect("write borderFill");
         let xml = String::from_utf8(writer.into_inner()).unwrap();
         assert!(
             !xml.contains("fillBrush"),
-            "FillType::None 은 fillBrush 미출력: {xml}"
+            "FillType::None + solid 없음 은 fillBrush 미출력: {xml}"
+        );
+    }
+
+    #[test]
+    fn write_border_fill_restores_empty_winbrush_when_none_with_solid() {
+        // [Finding 12] 원본 winBrush faceColor="none"+무늬없음 은 파서가 렌더용으로
+        // FillType::None 을 두되 solid 데이터를 보존한다. 직렬화기는 이 solid 로
+        // 빈 winBrush 를 그대로 복원해야 round-trip 무손실이 된다(요소 누락 금지).
+        use crate::model::style::{Fill, SolidFill};
+        let mut bf = BorderFill::default();
+        bf.fill = Fill {
+            fill_type: FillType::None,
+            solid: Some(SolidFill {
+                background_color: 0xFFFF_FFFF, // faceColor="none" 센티넬
+                pattern_color: 0xFF00_0000,    // hatchColor="#FF000000" (a=FF 보존)
+                pattern_type: -1,
+            }),
+            alpha: 0,
+            ..Default::default()
+        };
+
+        let mut writer = Writer::new(Vec::new());
+        write_border_fill(&mut writer, 1, &bf).expect("write borderFill");
+        let xml = String::from_utf8(writer.into_inner()).unwrap();
+
+        assert!(
+            xml.contains(
+                r##"<hc:fillBrush><hc:winBrush faceColor="none" hatchColor="#FF000000" alpha="0"/></hc:fillBrush>"##
+            ),
+            "보존된 빈 winBrush 가 faceColor=none 으로 복원되어야 함: {xml}"
         );
     }
 

@@ -1389,12 +1389,17 @@ fn parse_border_fill(
                                     _ => {}
                                 }
                             }
-                            // faceColor=none + 무늬 없음 → 채우기 없음
+                            // faceColor=none + 무늬 없음 → 렌더는 "채우기 없음"(FillType::None).
+                            // 단, winBrush 요소 자체는 원본에 존재하므로 solid 데이터를
+                            // 항상 보존해 직렬화 때 그대로 복원한다(round-trip 무손실).
+                            // 의미 분리: fill_type 은 "어떻게 렌더되는가"(None=빈 채우기),
+                            // solid.is_some() 는 "winBrush 요소가 원본에 있었는가". 렌더 소비자는
+                            // fill_type==Solid 로만 채우기를 그리므로 None+solid 조합은 렌더상
+                            // 무채움이며, 동시에 직렬화기는 solid 로 winBrush 를 되살린다.
                             if face_is_none && solid.pattern_type < 0 {
                                 bf.fill.fill_type = FillType::None;
-                            } else {
-                                bf.fill.solid = Some(solid);
                             }
+                            bf.fill.solid = Some(solid);
                         }
                         b"gradation" => {
                             bf.fill.fill_type = FillType::Gradient;
@@ -2341,6 +2346,57 @@ mod tests {
             })
         );
         assert_eq!(ttf.type_info, Some([2, 3, 6, 0, 0, 1, 1, 1, 1, 1]));
+    }
+
+    #[test]
+    fn parse_empty_winbrush_preserves_solid_for_lossless_roundtrip() {
+        // [Finding 12] winBrush faceColor="none"+무늬없음 은 렌더상 빈 채우기이므로
+        // fill_type=None 으로 두되, winBrush 요소 자체는 원본에 있었으므로 solid 를
+        // 보존해야 직렬화 때 그대로 복원된다. 종전엔 solid 를 버려 요소가 누락됐다.
+        use crate::model::style::FillType;
+        let xml = r##"<?xml version="1.0" encoding="UTF-8"?>
+<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head" xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core">
+  <hh:refList>
+    <hh:borderFills itemCnt="1">
+      <hh:borderFill id="1" threeD="0" shadow="0" centerLine="NONE" breakCellSeparateLine="0">
+        <hh:slash type="NONE" Crooked="0" isCounter="0"/>
+        <hh:backSlash type="NONE" Crooked="0" isCounter="0"/>
+        <hh:leftBorder type="NONE" width="0.1 mm" color="#000000"/>
+        <hh:rightBorder type="NONE" width="0.1 mm" color="#000000"/>
+        <hh:topBorder type="NONE" width="0.1 mm" color="#000000"/>
+        <hh:bottomBorder type="NONE" width="0.1 mm" color="#000000"/>
+        <hc:fillBrush>
+          <hc:winBrush faceColor="none" hatchColor="#FF000000" alpha="0"/>
+        </hc:fillBrush>
+      </hh:borderFill>
+    </hh:borderFills>
+  </hh:refList>
+</hh:head>"##;
+
+        let (doc_info, _) = parse_hwpx_header(xml).unwrap();
+        let bf = &doc_info.border_fills[0];
+
+        // 렌더는 빈 채우기.
+        assert_eq!(
+            bf.fill.fill_type,
+            FillType::None,
+            "빈 winBrush 는 렌더상 채움 없음"
+        );
+        // 직렬화 복원을 위해 solid 데이터는 보존.
+        let solid = bf
+            .fill
+            .solid
+            .as_ref()
+            .expect("winBrush solid 데이터 보존 필요");
+        assert_eq!(
+            solid.background_color, 0xFFFF_FFFF,
+            "faceColor=none 센티넬 보존"
+        );
+        assert_eq!(
+            solid.pattern_color, 0xFF00_0000,
+            "hatchColor=#FF000000 보존"
+        );
+        assert_eq!(solid.pattern_type, -1, "무늬 없음");
     }
 
     #[test]

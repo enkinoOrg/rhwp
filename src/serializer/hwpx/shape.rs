@@ -22,7 +22,7 @@ use crate::model::shape::{
     CommonObjAttr, DrawingObjAttr, HorzAlign, HorzRelTo, LineShape, ObjectNumberingType,
     RectangleShape, ShapeComponentAttr, TextBox, TextFlow, TextWrap, VertAlign, VertRelTo,
 };
-use crate::model::style::{Fill, FillType, ImageFillMode, ShapeBorderLine};
+use crate::model::style::{Fill, FillType, ImageFillMode, ShapeBorderLine, SolidFill};
 use crate::model::ColorRef;
 
 use super::context::SerializeContext;
@@ -503,8 +503,46 @@ fn arrow_size_str(v: u32) -> &'static str {
     }
 }
 
+/// `<hc:fillBrush><hc:winBrush .../></hc:fillBrush>` 를 방출하는 단일 소유 함수.
+/// FillType::Solid 경로와 보존된 빈 채우기(FillType::None + solid 존재) 경로가
+/// 동일한 직렬화를 쓰도록 한 곳에 모은다(균일 규칙).
+fn write_win_brush<W: Write>(
+    w: &mut Writer<W>,
+    solid: &SolidFill,
+    alpha: u8,
+) -> Result<(), SerializeError> {
+    let face = color_to_hex(solid.background_color);
+    let hatch = color_to_hex(solid.pattern_color);
+    let alpha = fill_alpha_str(alpha);
+    start_tag(w, "hc:fillBrush")?;
+    if solid.pattern_type >= 1 {
+        empty_tag(
+            w,
+            "hc:winBrush",
+            &[
+                ("faceColor", &face),
+                ("hatchColor", &hatch),
+                ("hatchStyle", hatch_style_str(solid.pattern_type)),
+                ("alpha", &alpha),
+            ],
+        )?;
+    } else {
+        empty_tag(
+            w,
+            "hc:winBrush",
+            &[
+                ("faceColor", &face),
+                ("hatchColor", &hatch),
+                ("alpha", &alpha),
+            ],
+        )?;
+    }
+    end_tag(w, "hc:fillBrush")
+}
+
 /// `<hc:fillBrush>` — `parse_shape_fill_brush` 의 역매핑.
-/// `FillType::None` 은 원본에 fillBrush 부재로 간주하여 미방출.
+/// `FillType::None` 은 원본에 fillBrush 부재로 간주하되, 파서가 보존한 solid 가
+/// 있으면(빈 winBrush) 복원한다.
 ///
 /// 도형(rect/line)뿐 아니라 `header.rs` 의 borderFill 도 같은 fillBrush 구조를
 /// 쓰므로 `pub(crate)` 로 공유한다.
@@ -513,36 +551,16 @@ pub(crate) fn write_fill_brush<W: Write>(
     fill: &Fill,
 ) -> Result<(), SerializeError> {
     match fill.fill_type {
-        FillType::None => Ok(()),
+        // FillType::None 이지만 solid 데이터가 보존돼 있으면(원본 winBrush 가
+        // faceColor="none"+무늬없음 으로 빈 채우기였던 경우) winBrush 를 그대로
+        // 복원한다. solid 가 없으면 원본에 fillBrush 가 없었던 것이므로 미방출.
+        FillType::None => match &fill.solid {
+            Some(solid) => write_win_brush(w, solid, fill.alpha),
+            None => Ok(()),
+        },
         FillType::Solid => {
             let solid = fill.solid.unwrap_or_default();
-            let face = color_to_hex(solid.background_color);
-            let hatch = color_to_hex(solid.pattern_color);
-            let alpha = fill_alpha_str(fill.alpha);
-            start_tag(w, "hc:fillBrush")?;
-            if solid.pattern_type >= 1 {
-                empty_tag(
-                    w,
-                    "hc:winBrush",
-                    &[
-                        ("faceColor", &face),
-                        ("hatchColor", &hatch),
-                        ("hatchStyle", hatch_style_str(solid.pattern_type)),
-                        ("alpha", &alpha),
-                    ],
-                )?;
-            } else {
-                empty_tag(
-                    w,
-                    "hc:winBrush",
-                    &[
-                        ("faceColor", &face),
-                        ("hatchColor", &hatch),
-                        ("alpha", &alpha),
-                    ],
-                )?;
-            }
-            end_tag(w, "hc:fillBrush")
+            write_win_brush(w, &solid, fill.alpha)
         }
         FillType::Gradient => {
             let grad = fill.gradient.clone().unwrap_or_default();
