@@ -120,4 +120,3 @@ merge 후 `local/devel`을 `upstream/devel`에 동기화한 뒤 렌더 영향 PR
 - PR 코멘트: merge 완료와 검증 결과 요약 등록
 - `local/devel`: `upstream/devel` merge commit 기준으로 동기화 완료
 - 렌더 영향 후속 확인: `cargo test --test svg_snapshot` 통과
-

@@ -133,4 +133,3 @@ cargo test --test svg_snapshot
 | macOS 로컬 검증 | pass |
 | `local/devel` | `upstream/devel`과 동일 |
 | 리뷰 문서 | archives 작성 완료 |
-
