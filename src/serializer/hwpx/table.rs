@@ -403,10 +403,17 @@ fn text_flow_str(f: TextFlow) -> &'static str {
 
 fn table_page_break_str(pb: TablePageBreak) -> &'static str {
     use TablePageBreak::*;
+    // HWPX 문자열 매핑은 파서(parser/hwpx/section.rs `pageBreak`)의 정확한 역이어야
+    // HWPX→HWPX 왕복이 충실하다. 파서는 한컴 관찰 기준으로
+    // `"TABLE"→CellBreak`, `"CELL"/"ROW"→RowBreak` 로 매핑하므로 (한컴 HWPX
+    // "CELL" = HWP5 row-break bit 1 = RowBreak), 직렬화도 그 역으로 방출한다.
+    // (이전 구현은 CellBreak→"CELL", RowBreak→"TABLE" 로 파서와 불일치해 왕복 시
+    //  CELL↔TABLE 이 뒤바뀌었다.) enum→HWP5 bit 매핑(hwpx_to_hwp.rs)은 enum 을
+    // 직접 쓰므로 이 변경의 영향을 받지 않는다.
     match pb {
         None => "NONE",
-        CellBreak => "CELL",
-        RowBreak => "TABLE",
+        CellBreak => "TABLE",
+        RowBreak => "CELL",
     }
 }
 
@@ -950,6 +957,17 @@ mod tests {
         let p = xml.find("<hp:pic ").expect("hp:pic");
         let b = xml.find("<hp:t>b</hp:t>").expect("b 텍스트");
         assert!(a < p && p < b, "슬롯이 a 와 b 사이에 와야 함: {}", xml);
+    }
+
+    #[test]
+    fn page_break_str_is_exact_inverse_of_parser() {
+        // 직렬화 문자열은 파서(parser/hwpx/section.rs pageBreak)의 정확한 역이어야
+        // HWPX→HWPX 왕복이 충실하다. 파서: "TABLE"→CellBreak, "CELL"/"ROW"→RowBreak.
+        // 따라서 직렬화: CellBreak→"TABLE", RowBreak→"CELL". (뒤바뀌면 한컴 HWPX 의
+        // CELL↔TABLE 의미가 왕복 시 스왑된다.)
+        assert_eq!(table_page_break_str(TablePageBreak::None), "NONE");
+        assert_eq!(table_page_break_str(TablePageBreak::CellBreak), "TABLE");
+        assert_eq!(table_page_break_str(TablePageBreak::RowBreak), "CELL");
     }
 
     #[test]
