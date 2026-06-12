@@ -126,7 +126,11 @@ pub fn serialize_hwpx(doc: &Document) -> Result<Vec<u8>, SerializeError> {
             media_type: e.media_type.clone(),
         })
         .collect();
-    let content_hpf = content::write_content_hpf(&section_hrefs, &content_bin_entries)?;
+    let content_hpf = content::write_content_hpf(
+        &section_hrefs,
+        &content_bin_entries,
+        doc.hwpx_aux_entry("Contents/content.hpf"),
+    )?;
     z.write_deflated("Contents/content.hpf", &content_hpf)?;
 
     // 10. META-INF/container.xml
