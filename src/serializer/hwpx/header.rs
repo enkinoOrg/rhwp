@@ -740,15 +740,22 @@ fn write_para_pr<W: Write>(
 ) -> Result<(), SerializeError> {
     // 속성 순서 (ParaShapeType.cpp:62-68): id, tabPrIDRef, condense,
     // fontLineHeight, snapToGrid, suppressLineNumbers, checked
+    //
+    // condense/fontLineHeight/snapToGrid 는 attr1 비트로 보존된다(파서 역매핑):
+    //   snapToGrid = bit8, condense = bits9..15, fontLineHeight = bit22.
+    // 종전엔 상수("0"/"0"/"1")로 하드코딩해 condense(20 등)와 snapToGrid(0)을 잃었다.
+    let condense = ((ps.attr1 >> 9) & 0x7f).to_string();
+    let font_line_height = ((ps.attr1 >> 22) & 1).to_string();
+    let snap_to_grid = ((ps.attr1 >> 8) & 1).to_string();
     start_tag_attrs(
         w,
         "hh:paraPr",
         &[
             ("id", &id.to_string()),
             ("tabPrIDRef", &ps.tab_def_id.to_string()),
-            ("condense", "0"),
-            ("fontLineHeight", "0"),
-            ("snapToGrid", "1"),
+            ("condense", &condense),
+            ("fontLineHeight", &font_line_height),
+            ("snapToGrid", &snap_to_grid),
             ("suppressLineNumbers", "0"),
             ("checked", "0"),
         ],
@@ -1210,6 +1217,39 @@ mod tests {
         assert!(
             xml.contains(r#"<hh:shadow type="NONE""#),
             "shadow NONE 항상 출력: {xml}"
+        );
+    }
+
+    #[test]
+    fn write_para_pr_emits_condense_fontlineheight_snaptogrid_from_attr1() {
+        // condense/fontLineHeight/snapToGrid 는 상수가 아니라 attr1 비트에서 나와야 한다.
+        let mut ps = ParaShape::default();
+        // condense=20 (bits9..15), fontLineHeight=1 (bit22), snapToGrid=0 (bit8 clear)
+        ps.attr1 = (20 << 9) | (1 << 22);
+        let mut writer = Writer::new(Vec::new());
+        write_para_pr(&mut writer, 0, &ps).expect("write paraPr");
+        let xml = String::from_utf8(writer.into_inner()).unwrap();
+        assert!(
+            xml.contains(r#"condense="20""#),
+            "condense=20 가 attr1 에서 직렬화되어야 함: {xml}"
+        );
+        assert!(
+            xml.contains(r#"fontLineHeight="1""#),
+            "fontLineHeight=1: {xml}"
+        );
+        assert!(
+            xml.contains(r#"snapToGrid="0""#),
+            "snapToGrid=0(bit8 clear): {xml}"
+        );
+
+        // snapToGrid=1 (bit8 set), condense=0
+        ps.attr1 = 1 << 8;
+        let mut writer = Writer::new(Vec::new());
+        write_para_pr(&mut writer, 0, &ps).expect("write paraPr");
+        let xml = String::from_utf8(writer.into_inner()).unwrap();
+        assert!(
+            xml.contains(r#"snapToGrid="1""#) && xml.contains(r#"condense="0""#),
+            "snapToGrid=1 + condense=0: {xml}"
         );
     }
 
