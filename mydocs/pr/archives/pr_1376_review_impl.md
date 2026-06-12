@@ -136,4 +136,23 @@ Could you please narrow the fallback condition so that:
 Also, could you link the related issue number in the PR description, or open a small issue for this specific TAC host-line spacing problem and link it here?
 
 Again, thank you for the careful repro case. This is a useful fix direction, and I think it just needs the fallback scope tightened before we can merge it.
+
+---
+
+한국어로도 함께 남깁니다.
+
+자세한 분석과 재현 fixture를 추가해 주셔서 감사합니다. `control_index`와 `lineSegArray`가 서로 다른 인덱스라는 설명은 문제를 이해하는 데 큰 도움이 되었습니다.
+
+로컬과 GitHub Actions에서 확인한 결과, 현재 PR은 아직 바로 머지하기 어렵습니다. 기존 회귀 테스트인 `renderer::layout::integration_tests::tests::test_521_tac_table_outer_margin_bottom_p2`가 로컬과 CI에서 동일하게 실패하고 있습니다.
+
+이 테스트는 TAC 표 뒤 PDF 기준 간격이 `20.00 ±2px`로 유지되기를 기대하지만, 현재 PR 적용 후에는 `24.85px`로 커집니다. 따라서 새 fixture는 해결하지만 `line_segs.last()` 폴백이 너무 넓게 적용되어 기존 TAC 표 outer margin 케이스를 변경하는 것으로 보입니다.
+
+가능하시다면 다음 두 테스트가 모두 통과하도록 폴백 조건을 조금 더 좁혀 주실 수 있을까요?
+
+1. `test_tac_host_line_spacing_with_preceding_invisible_controls`
+2. `test_521_tac_table_outer_margin_bottom_p2`
+
+또한 이 TAC host-line spacing 문제에 대응되는 이슈 번호를 PR 본문에 연결해 주시거나, 작은 이슈를 새로 열어 이 PR에 연결해 주시면 좋겠습니다.
+
+좋은 재현 케이스와 분석을 제공해 주셔서 다시 한 번 감사합니다. 방향은 유효해 보이며, merge 전에는 폴백 적용 범위만 조금 더 좁히면 될 것 같습니다.
 ```
