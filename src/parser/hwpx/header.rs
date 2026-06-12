@@ -374,6 +374,7 @@ fn parse_font(
     let mut name = String::new();
     let mut font_type = 0u8;
     let mut type_info = None;
+    let mut subst_font = None;
 
     for attr in e.attributes().flatten() {
         match attr.key.as_ref() {
@@ -393,11 +394,11 @@ fn parse_font(
         let mut buf = Vec::new();
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref ce)) => {
-                    if local_name(ce.name().as_ref()) == b"typeInfo" {
-                        type_info = Some(parse_font_type_info(ce, &name, font_type));
-                    }
-                }
+                Ok(Event::Empty(ref ce)) => match local_name(ce.name().as_ref()) {
+                    b"typeInfo" => type_info = Some(parse_font_type_info(ce, &name, font_type)),
+                    b"substFont" => subst_font = Some(parse_subst_font(ce)),
+                    _ => {}
+                },
                 Ok(Event::Start(ref ce)) => {
                     if local_name(ce.name().as_ref()) == b"typeInfo" {
                         type_info = Some(parse_font_type_info(ce, &name, font_type));
@@ -422,6 +423,7 @@ fn parse_font(
             alt_type: font_type,
             type_info,
             default_name,
+            subst_font,
             ..Default::default()
         };
         // fontface lang 컨텍스트에 따라 해당 언어 그룹에 추가
@@ -458,6 +460,29 @@ fn parse_font_type_info(
     }
 
     info
+}
+
+/// `<hh:substFont face="…" type="…" isEmbedded="…" binaryItemIDRef="…"/>` 4개
+/// 속성을 보존한다. 부모 `<hh:font>` 와 별개의 type/임베드 정보를 가질 수 있다.
+fn parse_subst_font(e: &quick_xml::events::BytesStart) -> SubstFont {
+    let mut sf = SubstFont::default();
+    for attr in e.attributes().flatten() {
+        let value = attr_str(&attr);
+        match attr.key.as_ref() {
+            b"face" => sf.face = value,
+            b"type" => {
+                sf.font_type = match value.as_str() {
+                    "TTF" => 1,
+                    "HFT" => 2,
+                    _ => 0,
+                };
+            }
+            b"isEmbedded" => sf.is_embedded = value == "1",
+            b"binaryItemIDRef" => sf.bin_item_id_ref = value,
+            _ => {}
+        }
+    }
+    sf
 }
 
 fn font_family_type_to_u8(value: &str) -> u8 {
@@ -2247,6 +2272,57 @@ mod tests {
             hft.default_name,
             Some("Sinmyeong Gyeonmyeongjo".to_string())
         );
+    }
+
+    #[test]
+    fn test_parse_hwpx_subst_font_captures_all_attributes() {
+        // HFT 글꼴이 TTF 대체 글꼴을 갖는 경우(부모와 type 이 다를 수 있음) +
+        // substFont 와 typeInfo 가 함께 있는 경우 두 가지를 모두 검증.
+        let xml = r##"<?xml version="1.0" encoding="UTF-8"?>
+<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">
+  <hh:refList>
+    <hh:fontfaces itemCnt="1">
+      <hh:fontface lang="HANGUL" fontCnt="2">
+        <hh:font id="0" face="HCI Poppy" type="HFT" isEmbedded="0">
+          <hh:substFont face="한컴바탕" type="TTF" isEmbedded="0" binaryItemIDRef=""/>
+        </hh:font>
+        <hh:font id="1" face="바탕" type="TTF" isEmbedded="0">
+          <hh:substFont face="함초롬바탕" type="TTF" isEmbedded="0" binaryItemIDRef=""/>
+          <hh:typeInfo familyType="FCAT_GOTHIC" weight="6" proportion="0" contrast="0" strokeVariation="1" armStyle="1" letterform="1" midline="1" xHeight="1"/>
+        </hh:font>
+      </hh:fontface>
+    </hh:fontfaces>
+  </hh:refList>
+</hh:head>"##;
+
+        let (doc_info, _) = parse_hwpx_header(xml).unwrap();
+        let hft = &doc_info.font_faces[0][0];
+        let ttf = &doc_info.font_faces[0][1];
+
+        // 부모 type=HFT(2) 이지만 대체 글꼴 type=TTF(1) — 독립 보존.
+        assert_eq!(hft.alt_type, 2);
+        assert_eq!(
+            hft.subst_font,
+            Some(SubstFont {
+                face: "한컴바탕".to_string(),
+                font_type: 1,
+                is_embedded: false,
+                bin_item_id_ref: String::new(),
+            })
+        );
+        assert_eq!(hft.type_info, None);
+
+        // substFont 와 typeInfo 공존.
+        assert_eq!(
+            ttf.subst_font,
+            Some(SubstFont {
+                face: "함초롬바탕".to_string(),
+                font_type: 1,
+                is_embedded: false,
+                bin_item_id_ref: String::new(),
+            })
+        );
+        assert_eq!(ttf.type_info, Some([2, 3, 6, 0, 0, 1, 1, 1, 1, 1]));
     }
 
     #[test]

@@ -18,7 +18,7 @@ use quick_xml::Writer;
 use crate::model::document::{DocInfo, DocProperties, Document};
 use crate::model::style::{
     Alignment, BorderFill, BorderLine, BorderLineType, CharShape, DiagonalLine, FillType, Font,
-    HeadType, LineSpacingType, Numbering, ParaShape, Style, TabDef,
+    HeadType, LineSpacingType, Numbering, ParaShape, Style, SubstFont, TabDef,
 };
 use crate::model::ColorRef;
 
@@ -146,15 +146,20 @@ fn write_fontfaces<W: Write>(w: &mut Writer<W>, doc_info: &DocInfo) -> Result<()
                 ("type", font_type_str(font.alt_type)),
                 ("isEmbedded", "0"),
             ];
-            // typeInfo(파나포스 10바이트)가 IR에 있으면 자식으로 복원한다.
-            // 없으면 종전대로 self-closing.
-            match &font.type_info {
-                Some(ti) => {
-                    start_tag_attrs(w, "hh:font", &font_attrs)?;
-                    write_font_type_info(w, ti)?;
-                    end_tag(w, "hh:font")?;
+            // substFont(대체 글꼴)·typeInfo(파나포스 10바이트)가 IR에 있으면
+            // 자식으로 복원한다. 원본 순서는 substFont → typeInfo. 둘 다 없으면
+            // 종전대로 self-closing.
+            if font.subst_font.is_some() || font.type_info.is_some() {
+                start_tag_attrs(w, "hh:font", &font_attrs)?;
+                if let Some(sf) = &font.subst_font {
+                    write_subst_font(w, sf)?;
                 }
-                None => empty_tag(w, "hh:font", &font_attrs)?,
+                if let Some(ti) = &font.type_info {
+                    write_font_type_info(w, ti)?;
+                }
+                end_tag(w, "hh:font")?;
+            } else {
+                empty_tag(w, "hh:font", &font_attrs)?;
             }
         }
         end_tag(w, "hh:fontface")?;
@@ -203,6 +208,22 @@ fn write_font_type_info<W: Write>(w: &mut Writer<W>, ti: &[u8; 10]) -> Result<()
             ("letterform", &letterform),
             ("midline", &midline),
             ("xHeight", &x_height),
+        ],
+    )
+}
+
+/// `parse_subst_font` 의 역함수. 4개 속성을 원본 순서(face·type·isEmbedded·
+/// binaryItemIDRef)로 복원한다. `binaryItemIDRef` 는 비임베드 시에도 빈 문자열로
+/// 항상 출력한다(한컴 원본과 동일).
+fn write_subst_font<W: Write>(w: &mut Writer<W>, sf: &SubstFont) -> Result<(), SerializeError> {
+    empty_tag(
+        w,
+        "hh:substFont",
+        &[
+            ("face", &sf.face),
+            ("type", font_type_str(sf.font_type)),
+            ("isEmbedded", if sf.is_embedded { "1" } else { "0" }),
+            ("binaryItemIDRef", &sf.bin_item_id_ref),
         ],
     )
 }
@@ -1130,6 +1151,55 @@ mod tests {
         );
         // serif 바이트 [1] 은 XML 에 노출되지 않는다(파서가 글꼴명에서 합성).
         assert!(!xml.contains("serif"));
+    }
+
+    #[test]
+    fn write_subst_font_emits_all_four_attributes_in_order() {
+        let sf = SubstFont {
+            face: "한컴바탕".to_string(),
+            font_type: 1,
+            is_embedded: false,
+            bin_item_id_ref: String::new(),
+        };
+        let mut writer = Writer::new(Vec::new());
+        write_subst_font(&mut writer, &sf).expect("write substFont");
+        let xml = String::from_utf8(writer.into_inner()).unwrap();
+        assert_eq!(
+            xml,
+            r#"<hh:substFont face="한컴바탕" type="TTF" isEmbedded="0" binaryItemIDRef=""/>"#,
+            "substFont 4개 속성이 원본 순서/값으로 복원되어야 함(비임베드도 빈 binaryItemIDRef 출력)"
+        );
+    }
+
+    #[test]
+    fn write_fontfaces_emits_subst_font_before_type_info() {
+        let mut doc_info = DocInfo::default();
+        doc_info.font_faces = vec![Vec::new(); 7];
+        // substFont 와 typeInfo 를 모두 가진 글꼴: 원본 순서는 substFont → typeInfo.
+        doc_info.font_faces[0].push(Font {
+            name: "바탕".to_string(),
+            alt_type: 1,
+            type_info: Some([2, 3, 6, 0, 0, 1, 1, 1, 1, 1]),
+            subst_font: Some(SubstFont {
+                face: "한컴바탕".to_string(),
+                font_type: 1,
+                is_embedded: false,
+                bin_item_id_ref: String::new(),
+            }),
+            ..Default::default()
+        });
+        let mut writer = Writer::new(Vec::new());
+        write_fontfaces(&mut writer, &doc_info).expect("write fontfaces");
+        let xml = String::from_utf8(writer.into_inner()).unwrap();
+        let sub = xml.find("<hh:substFont ").expect("substFont present");
+        let ti = xml.find("<hh:typeInfo ").expect("typeInfo present");
+        assert!(sub < ti, "substFont 가 typeInfo 보다 먼저 와야 함: {xml}");
+        assert!(
+            xml.contains(
+                r#"<hh:font id="0" face="바탕" type="TTF" isEmbedded="0"><hh:substFont face="한컴바탕""#
+            ),
+            "substFont 가 font 의 첫 자식이어야 함: {xml}"
+        );
     }
 
     #[test]

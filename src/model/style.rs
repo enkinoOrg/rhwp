@@ -17,6 +17,26 @@ pub struct Font {
     pub type_info: Option<[u8; 10]>,
     /// 기본 글꼴 이름
     pub default_name: Option<String>,
+    /// 대체 글꼴 (HWPX `<hh:substFont>`) — 원본 글꼴 부재 시 대체될 글꼴 정보.
+    /// HWP5 의 `alt_name`/`alt_type` 과 달리 type·임베드 정보를 독립적으로 보존한다.
+    pub subst_font: Option<SubstFont>,
+}
+
+/// 대체 글꼴 (HWPX `<hh:substFont>`)
+///
+/// 4개 속성을 모두 보존해 라운드트립 무손실을 보장한다. `font_type`/`is_embedded`/
+/// `bin_item_id_ref` 는 부모 `<hh:font>` 의 같은 이름 속성과 독립적이다
+/// (예: HFT 글꼴이 TTF 대체 글꼴을 가질 수 있음).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SubstFont {
+    /// 대체 글꼴 이름
+    pub face: String,
+    /// 대체 글꼴 유형 (0: 알 수 없음, 1: TTF, 2: HFT)
+    pub font_type: u8,
+    /// 임베드 여부
+    pub is_embedded: bool,
+    /// 임베드 바이너리 아이템 ID 참조 (비임베드 시 빈 문자열; 항상 존재)
+    pub bin_item_id_ref: String,
 }
 
 /// 글자 모양 (HWPTAG_CHAR_SHAPE)
