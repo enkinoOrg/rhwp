@@ -27,7 +27,7 @@ HWP5 셀 필드 이름 파서의 의미와도 맞다.
 | 상태 | open |
 | draft | false |
 | mergeable | `MERGEABLE` |
-| mergeStateStatus | `BLOCKED` — 문서 커밋 전 head 기준 `Build & Test` 진행 중 |
+| mergeStateStatus | `CLEAN` |
 | 변경량 | 2 files, +94 / -0 |
 | 작성자 | `oksure` |
 | 관련 이슈 | `Related #493` — 부분 해결, close하지 않음 |
@@ -43,7 +43,7 @@ GitHub checks:
 
 | 체크 | 결과 |
 |---|---|
-| Build & Test | 문서 커밋 전 head 기준 진행 중 |
+| Build & Test | pass |
 | CodeQL | pass |
 | Analyze rust | pass |
 | Analyze javascript-typescript | pass |
