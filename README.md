@@ -2,7 +2,7 @@
 >
 > 이 저장소는 upstream RHWP를 기반으로 Enkino 프로젝트가 공용으로 사용하는 Studio를 배포한다.
 > 운영 주소는 `https://rhwp.enkinokorea.workers.dev`이며, 로컬 글꼴 감지 권한 안내 없이 대체 글꼴로 표시한다.
-> 자세한 내용은 [아키텍처](docs/tech/architecture.md), [빌드 및 배포](docs/tech/deployment.md), [upstream 동기화](docs/tech/upstream-sync.md)를 참고한다.
+> 자세한 내용은 [아키텍처](docs/tech/architecture.md), [외부 프로젝트 연동 가이드](docs/tech/integration-guide.md), [빌드 및 배포](docs/tech/deployment.md), [upstream 동기화](docs/tech/upstream-sync.md)를 참고한다.
 
 <p align="center">
   <img src="assets/logo/logo-256.png" alt="rhwp logo" width="128" />
