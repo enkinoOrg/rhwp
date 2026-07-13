@@ -14,6 +14,9 @@ bindings/Native/Cargo.lock
 # Output (렌더링 결과물)
 /output/
 /dist/swift/
+/node_modules/
+/.playwright-cli/
+/.wrangler/
 
 # Docker
 .docker/

@@ -6,6 +6,7 @@ import { VitePWA } from 'vite-plugin-pwa';
 const pkg = JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf-8'));
 
 export default defineConfig({
+  base: '/',
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
@@ -66,11 +67,11 @@ export default defineConfig({
         theme_color: '#2b6cb0',
         background_color: '#ffffff',
         display: 'standalone',
-        start_url: '/rhwp/',
-        scope: '/rhwp/',
+        start_url: '/',
+        scope: '/',
         file_handlers: [
           {
-            action: '/rhwp/',
+            action: '/',
             accept: {
               'application/x-hwp': ['.hwp'],
               'application/hwp+zip': ['.hwpx'],
