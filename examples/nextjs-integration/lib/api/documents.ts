@@ -15,24 +15,51 @@ export interface SaveDocumentFileResult {
   version: DocumentVersion
 }
 
+export interface DocumentDownloadHeadersInput {
+  fileName: string
+  version: DocumentVersion
+  byteLength: number
+  contentType: string
+}
+
 const CANONICAL_DOCUMENT_VERSION = /^(0|[1-9]\d*)$/
 
 // 문서 API 오류 표현
 export class DocumentApiError extends Error {
+  public readonly status: number
+
   constructor(
     message: string,
-    public readonly status: number,
+    status: number,
   ) {
     super(message)
     this.name = 'DocumentApiError'
+    this.status = status
   }
 }
 
 // 다른 저장본이 먼저 만들어진 경우의 오류 표현
 export class DocumentVersionConflictError extends DocumentApiError {
-  constructor(public readonly currentVersion?: DocumentVersion) {
+  public readonly currentVersion?: DocumentVersion
+
+  constructor(currentVersion?: DocumentVersion) {
     super('다른 사용자가 문서를 먼저 저장했습니다.', 409)
     this.name = 'DocumentVersionConflictError'
+    this.currentVersion = currentVersion
+  }
+}
+
+// 요청 본문 검증 오류 표현
+export class DocumentBodyValidationError extends Error {
+  public readonly status: 400 | 413
+
+  constructor(
+    message: string,
+    status: 400 | 413 = 400,
+  ) {
+    super(message)
+    this.name = 'DocumentBodyValidationError'
+    this.status = status
   }
 }
 
@@ -80,6 +107,126 @@ function formatIfMatch(version: DocumentVersion): string {
   }
 
   return `"${value}"`
+}
+
+// 응답 헤더용 파일명에서 제어 문자와 경로 문자 제거
+function sanitizeFileName(fileName: string): string {
+  return fileName.replace(/[\\/\r\n"]/g, '_') || 'document.hwpx'
+}
+
+// Content-Disposition filename의 ASCII fallback 생성
+function asciiFallbackFileName(fileName: string): string {
+  return fileName.replace(/[^\x20-\x7e]/g, '_') || 'document.hwpx'
+}
+
+// RFC 5987 filename* UTF-8 값 인코딩
+function encodeRfc5987Value(fileName: string): string {
+  return encodeURIComponent(fileName).replace(/['()*]/g, character =>
+    `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  )
+}
+
+// private HWPX download 응답 헤더 생성
+export function createDocumentDownloadHeaders(
+  input: DocumentDownloadHeadersInput,
+): Headers {
+  const fileName = sanitizeFileName(input.fileName)
+  const fallbackFileName = asciiFallbackFileName(fileName)
+
+  return new Headers({
+    'Content-Type': input.contentType,
+    'Content-Length': String(input.byteLength),
+    'Content-Disposition': `attachment; filename="${fallbackFileName}"; filename*=UTF-8''${encodeRfc5987Value(fileName)}`,
+    ETag: `"${input.version}"`,
+    'X-Document-Version': String(input.version),
+    'X-Document-File-Name': encodeURIComponent(fileName),
+    'Cache-Control': 'private, no-store',
+  })
+}
+
+// Content-Length의 canonical 형식과 상한을 본문 읽기 전에 검사
+export function assertContentLengthWithinLimit(
+  contentLength: string | null,
+  maxBytes: number,
+): void {
+  if (contentLength === null) return
+
+  if (!CANONICAL_DOCUMENT_VERSION.test(contentLength)) {
+    throw new DocumentBodyValidationError('Content-Length 헤더가 유효하지 않습니다.')
+  }
+
+  const byteLength = Number(contentLength)
+
+  if (!Number.isSafeInteger(byteLength)) {
+    throw new DocumentBodyValidationError('Content-Length 헤더가 유효하지 않습니다.')
+  }
+
+  if (byteLength > maxBytes) {
+    throw new DocumentBodyValidationError(
+      'HWPX 파일 크기가 허용 범위를 벗어났습니다.',
+      413,
+    )
+  }
+
+  if (byteLength === 0) {
+    throw new DocumentBodyValidationError('HWPX 요청 본문이 비어 있습니다.')
+  }
+}
+
+// 최대 크기까지 request body stream을 읽고 초과 시 즉시 취소
+export async function readBodyWithinLimit(
+  body: ReadableStream<Uint8Array> | null,
+  maxBytes: number,
+): Promise<Uint8Array> {
+  if (!body) {
+    throw new DocumentBodyValidationError('HWPX 요청 본문이 없습니다.')
+  }
+
+  const reader = body.getReader()
+  const chunks: Uint8Array[] = []
+  let byteLength = 0
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+
+      if (done) break
+
+      const nextByteLength = byteLength + value.byteLength
+
+      if (nextByteLength > maxBytes) {
+        try {
+          await reader.cancel('HWPX 파일 크기 제한 초과')
+        } catch {
+          // cancel 실패는 413 응답을 바꾸지 않는다.
+        }
+
+        throw new DocumentBodyValidationError(
+          'HWPX 파일 크기가 허용 범위를 벗어났습니다.',
+          413,
+        )
+      }
+
+      chunks.push(value)
+      byteLength = nextByteLength
+    }
+  } finally {
+    reader.releaseLock()
+  }
+
+  if (byteLength === 0) {
+    throw new DocumentBodyValidationError('HWPX 요청 본문이 비어 있습니다.')
+  }
+
+  const bytes = new Uint8Array(byteLength)
+  let offset = 0
+
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+
+  return bytes
 }
 
 // 응답 오류 메시지 추출

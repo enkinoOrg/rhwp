@@ -1,5 +1,11 @@
 import { NextRequest } from 'next/server'
 
+import {
+  assertContentLengthWithinLimit,
+  createDocumentDownloadHeaders,
+  DocumentBodyValidationError,
+  readBodyWithinLimit,
+} from '../../../../../lib/api/documents'
 import { DocumentRepository } from '../../../../../server/document-repository'
 import { SupabaseDocumentStorage } from '../../../../../server/supabase-document-storage'
 import {
@@ -65,23 +71,6 @@ function validateHwpx(request: NextRequest, bytes: Uint8Array): void {
   if (!isZip) throw new RequestValidationError('HWPX ZIP signature가 유효하지 않습니다.')
 }
 
-// 응답 헤더용 파일명에서 제어 문자와 경로 문자 제거
-function sanitizeFileName(fileName: string): string {
-  return fileName.replace(/[\\/\r\n"]/g, '_') || 'document.hwpx'
-}
-
-// Content-Disposition filename의 ASCII fallback 생성
-function asciiFallbackFileName(fileName: string): string {
-  return fileName.replace(/[^\x20-\x7e]/g, '_') || 'document.hwpx'
-}
-
-// RFC 5987 filename* UTF-8 값 인코딩
-function encodeRfc5987Value(fileName: string): string {
-  return encodeURIComponent(fileName).replace(/['()*]/g, character =>
-    `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
-  )
-}
-
 // 문서 원본을 private Storage에서 읽어 반환
 export async function GET(_request: NextRequest, context: RouteContext): Promise<Response> {
   const session = await requireSession()
@@ -95,19 +84,13 @@ export async function GET(_request: NextRequest, context: RouteContext): Promise
     return Response.json({ error: '문서를 찾을 수 없습니다.' }, { status: 404 })
   }
 
-  const fileName = sanitizeFileName(document.fileName)
-  const fallbackFileName = asciiFallbackFileName(fileName)
-
   return new Response(document.bytes, {
-    headers: {
-      'Content-Type': document.contentType,
-      'Content-Length': String(document.bytes.byteLength),
-      'Content-Disposition': `attachment; filename="${fallbackFileName}"; filename*=UTF-8''${encodeRfc5987Value(fileName)}`,
-      ETag: `"${document.version}"`,
-      'X-Document-Version': String(document.version),
-      'X-Document-File-Name': encodeURIComponent(fileName),
-      'Cache-Control': 'private, no-store',
-    },
+    headers: createDocumentDownloadHeaders({
+      fileName: document.fileName,
+      version: document.version,
+      byteLength: document.bytes.byteLength,
+      contentType: document.contentType,
+    }),
   })
 }
 
@@ -120,7 +103,8 @@ export async function PUT(request: NextRequest, context: RouteContext): Promise<
 
   try {
     const expectedVersion = parseExpectedVersion(request.headers)
-    const bytes = new Uint8Array(await request.arrayBuffer())
+    assertContentLengthWithinLimit(request.headers.get('content-length'), MAX_HWPX_BYTES)
+    const bytes = await readBodyWithinLimit(request.body, MAX_HWPX_BYTES)
 
     validateHwpx(request, bytes)
 
@@ -137,7 +121,10 @@ export async function PUT(request: NextRequest, context: RouteContext): Promise<
 
     return Response.json({ version: result.version }, { status: 200 })
   } catch (error) {
-    if (error instanceof RequestValidationError) {
+    if (
+      error instanceof RequestValidationError ||
+      error instanceof DocumentBodyValidationError
+    ) {
       return Response.json({ error: error.message }, { status: error.status })
     }
 

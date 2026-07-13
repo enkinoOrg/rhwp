@@ -21,6 +21,16 @@ create table if not exists public.document_versions (
   unique (document_id, version)
 );
 
+-- Data API가 route 권한 경계를 우회하지 못하도록 업무 테이블을 서버 전용으로 잠근다.
+alter table public.documents enable row level security;
+alter table public.document_versions enable row level security;
+
+revoke all on table public.documents, public.document_versions from public;
+revoke all on table public.documents, public.document_versions from anon, authenticated;
+revoke all on table public.documents, public.document_versions from service_role;
+-- adapter는 현재 metadata 조회만 직접 수행하고, version 쓰기는 아래 security definer RPC가 담당한다.
+grant select on table public.documents to service_role;
+
 -- append-only version 행 수정과 삭제 차단
 create or replace function public.reject_document_version_mutation()
 returns trigger

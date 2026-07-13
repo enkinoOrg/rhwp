@@ -49,7 +49,11 @@ export interface DocumentFile extends StoredObject {
 
 // 문서 metadata와 private Storage를 조합하는 저장소
 export class DocumentRepository {
-  constructor(private readonly storage: DocumentStorage) {}
+  private readonly storage: DocumentStorage
+
+  constructor(storage: DocumentStorage) {
+    this.storage = storage
+  }
 
   // 현재 HWPX 원본 조회
   async getCurrentFile(documentId: string): Promise<DocumentFile | null> {
