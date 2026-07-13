@@ -42,9 +42,9 @@ sql/document-versions.sql
 ## 실행 흐름
 
 1. `HwpxEditor`는 공용 Studio URL로 editor만 만들고 같은 출처 `GET /api/documents/:id/file`로 HWPX를 읽습니다.
-2. Route Handler는 세션과 read 권한을 확인한 뒤 서버 전용 service role로 private bucket에서 bytes를 가져옵니다.
-3. 저장 시 component는 `editor.exportHwpx()` 결과와 quoted ETag `If-Match: "3"`을 같은 출처 `PUT`으로 보냅니다.
-4. Route Handler는 세션, edit 권한, MIME type, 50MB 크기, ZIP signature를 확인합니다.
+2. Route Handler는 세션과 read 권한을 확인한 뒤 서버 전용 service role로 private bucket에서 bytes를 가져옵니다. `Content-Disposition`은 ASCII fallback과 RFC 5987 `filename*`을 함께 보내며, `X-Document-File-Name`은 `encodeURIComponent` 값이므로 client가 `decodeURIComponent`로 복원합니다.
+3. 저장 시 component는 `editor.exportHwpx()` 결과와 canonical quoted ETag `If-Match: "3"`을 같은 출처 `PUT`으로 보냅니다. version은 선행 0 없이 표현한 nonnegative safe integer만 허용합니다.
+4. Route Handler는 세션, edit 권한, MIME type, 50MB 크기, ZIP signature를 확인합니다. 이 입력 검증 오류만 `400` 또는 `413`으로 공개하고, Storage·DB 같은 내부 오류는 로그 뒤 일반화한 `500`으로 응답합니다.
 5. repository는 새 고유 Storage object를 만들고, SQL RPC가 기준 version 비교, append-only `document_versions` insert, `documents.current_version` 변경을 한 트랜잭션으로 처리합니다.
 6. 기준 version이 다르면 API는 `409 Conflict`를 반환하고 기존 원본을 덮어쓰지 않습니다. component는 `DocumentVersionConflictError`를 잡아 최신 문서 재조회 UI를 보여 줍니다.
 
@@ -52,7 +52,9 @@ sql/document-versions.sql
 
 `sql/document-versions.sql`은 예제입니다. 운영 DB에 적용하기 전 기존 `documents` 스키마, 사용자 ID 타입, RLS 정책, service role 권한, private bucket 이름을 검토합니다. `create_document_version` RPC는 document 행을 잠근 뒤 version 행을 추가하고 current version을 갱신합니다. version 행은 trigger로 update와 delete를 차단합니다.
 
-업로드 object는 DB 커밋보다 먼저 새 고유 key에 생성됩니다. 동시 저장으로 RPC가 충돌을 반환하면 repository는 그 미참조 object만 삭제합니다. 기존 current object는 어떤 경우에도 삭제하거나 `upsert`하지 않습니다.
+업로드 object는 DB 커밋보다 먼저 새 고유 key에 생성됩니다. 동시 저장으로 RPC가 충돌을 반환하면 repository는 그 미참조 object만 삭제합니다. 정리 자체가 실패하면 오류를 기록하고 GC 대상으로 남기되, 저장 충돌 응답은 반드시 `409`로 유지합니다. 기존 current object는 어떤 경우에도 삭제하거나 `upsert`하지 않습니다.
+
+RPC는 `security definer`로 동작하지만 owner는 `service_role`이 아닌 통제된 DB owner(`postgres`)로 고정하고, `PUBLIC`, `anon`, `authenticated`의 실행 권한을 제거한 뒤 `service_role`에만 `EXECUTE`를 부여합니다. 이 권한은 Route Handler가 매 요청 세션·문서 권한을 검증한다는 전제에서만 안전합니다.
 
 ## 제한과 운영 확인
 

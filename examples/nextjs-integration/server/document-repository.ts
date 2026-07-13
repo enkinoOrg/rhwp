@@ -93,7 +93,7 @@ export class DocumentRepository {
 
     if (result.kind === 'conflict') {
       // 경쟁 저장에서 남은 미참조 object만 정리한다.
-      await this.storage.deleteObject(storagePath)
+      await this.cleanupOrphanObject(storagePath)
     }
 
     return result
@@ -102,5 +102,14 @@ export class DocumentRepository {
   // 재사용을 막는 version object key 생성
   private createStoragePath(documentId: string, version: DocumentVersion): string {
     return `${documentId}/versions/${version}-${crypto.randomUUID()}.hwpx`
+  }
+
+  // 실패해도 version 충돌 응답을 유지하는 고아 object 정리
+  private async cleanupOrphanObject(storagePath: string): Promise<void> {
+    try {
+      await this.storage.deleteObject(storagePath)
+    } catch (error) {
+      console.error('고아 HWPX object 정리 실패: GC 대상으로 남김', { storagePath, error })
+    }
   }
 }

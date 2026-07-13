@@ -15,6 +15,8 @@ export interface SaveDocumentFileResult {
   version: DocumentVersion
 }
 
+const CANONICAL_DOCUMENT_VERSION = /^(0|[1-9]\d*)$/
+
 // 문서 API 오류 표현
 export class DocumentApiError extends Error {
   constructor(
@@ -39,6 +41,47 @@ function documentFileEndpoint(documentId: string): string {
   return `/api/documents/${encodeURIComponent(documentId)}/file`
 }
 
+// 헤더의 canonical nonnegative safe integer version 파싱
+function parseDocumentVersion(value: string | null): DocumentVersion {
+  if (!value || !CANONICAL_DOCUMENT_VERSION.test(value)) {
+    throw new Error('서버가 유효하지 않은 문서 version을 반환했습니다.')
+  }
+
+  const version = Number(value)
+
+  if (!Number.isSafeInteger(version) || version < 0) {
+    throw new Error('서버가 유효하지 않은 문서 version을 반환했습니다.')
+  }
+
+  return version
+}
+
+// 인코딩된 문서 파일명 헤더 파싱
+function parseDocumentFileName(encodedFileName: string | null): string {
+  if (!encodedFileName) return 'document.hwpx'
+
+  try {
+    return decodeURIComponent(encodedFileName)
+  } catch {
+    return 'document.hwpx'
+  }
+}
+
+// 저장 요청 version의 canonical 형식 검증
+function formatIfMatch(version: DocumentVersion): string {
+  const value = String(version)
+
+  if (
+    !Number.isSafeInteger(version) ||
+    version < 0 ||
+    !CANONICAL_DOCUMENT_VERSION.test(value)
+  ) {
+    throw new Error('저장 기준 version이 유효하지 않습니다.')
+  }
+
+  return `"${value}"`
+}
+
 // 응답 오류 메시지 추출
 async function readErrorMessage(response: Response): Promise<string> {
   const fallback = `문서 요청에 실패했습니다. (${response.status})`
@@ -61,15 +104,11 @@ export async function getDocumentFile(documentId: string): Promise<DocumentFile>
     throw new DocumentApiError(await readErrorMessage(response), response.status)
   }
 
-  const version = Number(response.headers.get('X-Document-Version'))
-
-  if (!Number.isInteger(version) || version < 0) {
-    throw new Error('서버가 유효하지 않은 문서 version을 반환했습니다.')
-  }
+  const version = parseDocumentVersion(response.headers.get('X-Document-Version'))
 
   return {
     bytes: await response.arrayBuffer(),
-    fileName: response.headers.get('X-Document-File-Name') ?? 'document.hwpx',
+    fileName: parseDocumentFileName(response.headers.get('X-Document-File-Name')),
     version,
   }
 }
@@ -84,7 +123,7 @@ export async function saveDocumentFile(
     credentials: 'same-origin',
     headers: {
       'Content-Type': 'application/haansofthwpx',
-      'If-Match': `"${input.version}"`,
+      'If-Match': formatIfMatch(input.version),
     },
     body: input.bytes,
   })

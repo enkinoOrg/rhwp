@@ -17,24 +17,43 @@ interface RouteContext {
   params: Promise<{ documentId: string }>
 }
 
+// 클라이언트에 공개해도 되는 입력 검증 오류
+class RequestValidationError extends Error {
+  constructor(
+    message: string,
+    public readonly status: 400 | 413 = 400,
+  ) {
+    super(message)
+    this.name = 'RequestValidationError'
+  }
+}
+
 // If-Match quoted ETag에서 기준 version 추출
 function parseExpectedVersion(headers: Headers): number {
   const value = headers.get('if-match')
-  const match = value?.match(/^"(\d+)"$/)
+  const match = value?.match(/^"(0|[1-9]\d*)"$/)
 
-  if (!match) throw new Error('If-Match 헤더에 quoted version이 필요합니다.')
+  if (!match) {
+    throw new RequestValidationError('If-Match 헤더에 canonical quoted version이 필요합니다.')
+  }
 
-  return Number(match[1])
+  const version = Number(match[1])
+
+  if (!Number.isSafeInteger(version) || version < 0) {
+    throw new RequestValidationError('If-Match version이 유효하지 않습니다.')
+  }
+
+  return version
 }
 
 // HWPX MIME type, 크기, ZIP signature 검사
 function validateHwpx(request: NextRequest, bytes: Uint8Array): void {
   if (request.headers.get('content-type')?.split(';')[0] !== HWPX_CONTENT_TYPE) {
-    throw new Error('HWPX Content-Type이 필요합니다.')
+    throw new RequestValidationError('HWPX Content-Type이 필요합니다.')
   }
 
   if (bytes.byteLength === 0 || bytes.byteLength > MAX_HWPX_BYTES) {
-    throw new Error('HWPX 파일 크기가 허용 범위를 벗어났습니다.')
+    throw new RequestValidationError('HWPX 파일 크기가 허용 범위를 벗어났습니다.', 413)
   }
 
   const isZip =
@@ -43,12 +62,24 @@ function validateHwpx(request: NextRequest, bytes: Uint8Array): void {
     bytes[2] === 0x03 &&
     bytes[3] === 0x04
 
-  if (!isZip) throw new Error('HWPX ZIP signature가 유효하지 않습니다.')
+  if (!isZip) throw new RequestValidationError('HWPX ZIP signature가 유효하지 않습니다.')
 }
 
-// 응답 헤더용 안전한 파일명 정리
-function safeFileName(fileName: string): string {
+// 응답 헤더용 파일명에서 제어 문자와 경로 문자 제거
+function sanitizeFileName(fileName: string): string {
   return fileName.replace(/[\\/\r\n"]/g, '_') || 'document.hwpx'
+}
+
+// Content-Disposition filename의 ASCII fallback 생성
+function asciiFallbackFileName(fileName: string): string {
+  return fileName.replace(/[^\x20-\x7e]/g, '_') || 'document.hwpx'
+}
+
+// RFC 5987 filename* UTF-8 값 인코딩
+function encodeRfc5987Value(fileName: string): string {
+  return encodeURIComponent(fileName).replace(/['()*]/g, character =>
+    `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  )
 }
 
 // 문서 원본을 private Storage에서 읽어 반환
@@ -64,16 +95,17 @@ export async function GET(_request: NextRequest, context: RouteContext): Promise
     return Response.json({ error: '문서를 찾을 수 없습니다.' }, { status: 404 })
   }
 
-  const fileName = safeFileName(document.fileName)
+  const fileName = sanitizeFileName(document.fileName)
+  const fallbackFileName = asciiFallbackFileName(fileName)
 
   return new Response(document.bytes, {
     headers: {
       'Content-Type': document.contentType,
       'Content-Length': String(document.bytes.byteLength),
-      'Content-Disposition': `attachment; filename="${fileName}"`,
+      'Content-Disposition': `attachment; filename="${fallbackFileName}"; filename*=UTF-8''${encodeRfc5987Value(fileName)}`,
       ETag: `"${document.version}"`,
       'X-Document-Version': String(document.version),
-      'X-Document-File-Name': fileName,
+      'X-Document-File-Name': encodeURIComponent(fileName),
       'Cache-Control': 'private, no-store',
     },
   })
@@ -105,9 +137,15 @@ export async function PUT(request: NextRequest, context: RouteContext): Promise<
 
     return Response.json({ version: result.version }, { status: 200 })
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'HWPX 저장에 실패했습니다.'
-    const status = message.includes('파일 크기') ? 413 : 400
+    if (error instanceof RequestValidationError) {
+      return Response.json({ error: error.message }, { status: error.status })
+    }
 
-    return Response.json({ error: message }, { status })
+    console.error('HWPX 저장 중 서버 오류', { documentId, error })
+
+    return Response.json(
+      { error: 'HWPX 저장 중 서버 오류가 발생했습니다.' },
+      { status: 500 },
+    )
   }
 }

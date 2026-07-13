@@ -76,3 +76,67 @@ test('Supabase 예제는 private Storage와 append-only version을 사용한다'
   assert.match(sql, /document_versions/)
   assert.match(sql, /unique \(document_id, version\)/i)
 })
+
+// GET 응답의 한글 파일명과 read 권한 계약 확인
+test('Next.js GET 예제는 read 권한과 ASCII-safe 파일명 헤더 계약을 유지한다', () => {
+  const route = readFileSync(
+    'examples/nextjs-integration/app/api/documents/[documentId]/file/route.ts',
+    'utf8',
+  )
+  const client = readFileSync('examples/nextjs-integration/lib/api/documents.ts', 'utf8')
+
+  assert.match(route, /assertCanReadDocument\(session\.userId, documentId\)/)
+  assert.match(route, /filename\*=UTF-8''\$\{encodeRfc5987Value\(fileName\)\}/)
+  assert.match(route, /'X-Document-File-Name': encodeURIComponent\(fileName\)/)
+  assert.match(client, /decodeURIComponent\(encodedFileName\)/)
+})
+
+// version 입력과 HTTP 오류 경계 계약 확인
+test('Next.js 예제는 canonical version만 받고 내부 저장 오류를 500으로 숨긴다', () => {
+  const route = readFileSync(
+    'examples/nextjs-integration/app/api/documents/[documentId]/file/route.ts',
+    'utf8',
+  )
+  const client = readFileSync('examples/nextjs-integration/lib/api/documents.ts', 'utf8')
+
+  assert.match(route, /\^"\(0\|\[1-9\]\\d\*\)"\$/)
+  assert.match(route, /Number\.isSafeInteger\(version\)/)
+  assert.match(client, /\^\(0\|\[1-9\]\\d\*\)\$/)
+  assert.match(client, /Number\.isSafeInteger\(version\)/)
+  assert.match(route, /error instanceof RequestValidationError/)
+  assert.match(route, /console\.error\('HWPX 저장 중 서버 오류'/)
+  assert.match(route, /status: 500/)
+})
+
+// 경쟁 저장의 409 보존과 Supabase RPC 권한 계약 확인
+test('경쟁 저장 정리 실패는 409을 보존하고 RPC는 service_role에만 권한을 부여한다', () => {
+  const repository = readFileSync(
+    'examples/nextjs-integration/server/document-repository.ts',
+    'utf8',
+  )
+  const sql = readFileSync(
+    'examples/nextjs-integration/sql/document-versions.sql',
+    'utf8',
+  )
+
+  assert.match(repository, /await this\.cleanupOrphanObject\(storagePath\)/)
+  assert.match(repository, /console\.error\('고아 HWPX object 정리 실패: GC 대상으로 남김'/)
+  assert.match(
+    repository,
+    /private async cleanupOrphanObject[\s\S]*try \{[\s\S]*await this\.storage\.deleteObject\(storagePath\)[\s\S]*\} catch/,
+  )
+  assert.match(sql, /alter function public\.create_document_version[\s\S]*owner to postgres/i)
+  assert.match(sql, /grant execute on function[\s\S]*to service_role/i)
+  assert.match(sql, /revoke all on function[\s\S]*from public/i)
+})
+
+// editor 전환 중 이전 비동기 저장 결과 격리 계약 확인
+test('HwpxEditor 예제는 generation과 callback ref로 이전 비동기 작업을 격리한다', () => {
+  const editor = readFileSync('examples/nextjs-integration/components/HwpxEditor.tsx', 'utf8')
+
+  assert.match(editor, /const generationRef = useRef\(0\)/)
+  assert.match(editor, /const onErrorRef = useRef\(onError\)/)
+  assert.match(editor, /generationRef\.current !== generation/)
+  assert.match(editor, /onErrorRef\.current\?\./)
+  assert.match(editor, /\}, \[documentId\]\)/)
+})

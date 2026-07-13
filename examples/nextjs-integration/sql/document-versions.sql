@@ -53,7 +53,7 @@ create or replace function public.create_document_version(
 returns table (kind text, version integer, current_version integer)
 language plpgsql
 security definer
-set search_path = public
+set search_path = ''
 as $$
 declare
   locked_version integer;
@@ -102,4 +102,10 @@ end;
 $$;
 
 -- service role만 이 RPC를 호출하도록 실제 운영 역할에 맞게 권한을 제한한다.
+-- owner는 service_role이 아닌 통제된 DB 소유자여야 하며, Supabase 기본 owner는 postgres다.
+alter function public.create_document_version(uuid, integer, integer, text, integer, uuid)
+owner to postgres;
+
 revoke all on function public.create_document_version(uuid, integer, integer, text, integer, uuid) from public;
+revoke all on function public.create_document_version(uuid, integer, integer, text, integer, uuid) from anon, authenticated;
+grant execute on function public.create_document_version(uuid, integer, integer, text, integer, uuid) to service_role;

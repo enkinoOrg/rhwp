@@ -26,8 +26,21 @@ export function HwpxEditor({
   const editorRef = useRef<RhwpEditor | null>(null)
   const versionRef = useRef<DocumentVersion | null>(null)
   const dirtyRef = useRef(false)
+  const generationRef = useRef(0)
+  const onErrorRef = useRef(onError)
+  const onSavedRef = useRef(onSaved)
   const [isDirty, setIsDirty] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
+
+  // 최신 오류 callback 유지
+  useEffect(() => {
+    onErrorRef.current = onError
+  }, [onError])
+
+  // 최신 저장 완료 callback 유지
+  useEffect(() => {
+    onSavedRef.current = onSaved
+  }, [onSaved])
 
   // dirty 상태를 갱신하고 페이지 이탈 경고에 반영
   const markDirty = useCallback(() => {
@@ -37,8 +50,14 @@ export function HwpxEditor({
 
   // 문서 ID 변경 시 editor 생성, 파일 로드, 리소스 정리
   useEffect(() => {
-    let disposed = false
+    const generation = generationRef.current + 1
+    generationRef.current = generation
     let editor: RhwpEditor | null = null
+
+    // 현재 문서 generation 확인
+    function isCurrentGeneration(): boolean {
+      return generationRef.current === generation
+    }
 
     // editor 초기화 함수
     async function initializeEditor() {
@@ -51,7 +70,7 @@ export function HwpxEditor({
           height: '100%',
         })
 
-        if (disposed) {
+        if (!isCurrentGeneration()) {
           editor.destroy()
           return
         }
@@ -60,26 +79,38 @@ export function HwpxEditor({
 
         const document = await getDocumentFile(documentId)
 
-        if (disposed) return
+        if (!isCurrentGeneration()) return
 
         await editor.loadFile(document.bytes, document.fileName)
+
+        if (!isCurrentGeneration()) return
+
         versionRef.current = document.version
         dirtyRef.current = false
         setIsDirty(false)
+        setIsSaving(false)
       } catch (error) {
-        if (!disposed) onError?.(error instanceof Error ? error : new Error(String(error)))
+        if (isCurrentGeneration()) {
+          onErrorRef.current?.(error instanceof Error ? error : new Error(String(error)))
+        }
       }
     }
 
     void initializeEditor()
 
     return () => {
-      disposed = true
-      editorRef.current = null
-      versionRef.current = null
+      if (isCurrentGeneration()) {
+        generationRef.current += 1
+        editorRef.current = null
+        versionRef.current = null
+        dirtyRef.current = false
+        setIsDirty(false)
+        setIsSaving(false)
+      }
+
       editor?.destroy()
     }
-  }, [documentId, onError])
+  }, [documentId])
 
   // 저장되지 않은 편집본의 페이지 이탈 경고
   useEffect(() => {
@@ -100,6 +131,7 @@ export function HwpxEditor({
   const save = useCallback(async () => {
     const editor = editorRef.current
     const version = versionRef.current
+    const generation = generationRef.current
 
     if (!editor || version === null || isSaving) return
 
@@ -109,16 +141,22 @@ export function HwpxEditor({
       const bytes = await editor.exportHwpx()
       const result = await saveDocumentFile(documentId, { bytes, version })
 
+      if (generationRef.current !== generation || editorRef.current !== editor) return
+
       versionRef.current = result.version
       dirtyRef.current = false
       setIsDirty(false)
-      onSaved?.(result.version)
+      onSavedRef.current?.(result.version)
     } catch (error) {
-      onError?.(error instanceof Error ? error : new Error(String(error)))
+      if (generationRef.current === generation && editorRef.current === editor) {
+        onErrorRef.current?.(error instanceof Error ? error : new Error(String(error)))
+      }
     } finally {
-      setIsSaving(false)
+      if (generationRef.current === generation && editorRef.current === editor) {
+        setIsSaving(false)
+      }
     }
-  }, [documentId, isSaving, onError, onSaved])
+  }, [documentId, isSaving])
 
   return (
     <section aria-busy={isSaving}>
