@@ -44,7 +44,7 @@ npm run dev
 npm run deploy
 ```
 
-배포 후 HTML, JavaScript, CSS, WASM의 HTTP 200 응답과 보안 헤더, 연동 프로젝트의 iframe API를 확인한다.
+배포 후 GET 요청으로 HTML, JavaScript, CSS, WASM의 HTTP 200 응답과 보안 헤더, 연동 프로젝트의 iframe API를 확인한다. Workers Static Assets의 HEAD 응답은 GET과 다를 수 있으므로 가용성 판정에 사용하지 않는다.
 
 ## 롤백
 
