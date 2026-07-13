@@ -37,6 +37,7 @@ export async function createEditor(container, options = {}) {
   }
 
   const studioUrl = options.studioUrl || DEFAULT_STUDIO_URL;
+  const studioOrigin = new URL(studioUrl, window.location.href).origin;
 
   // iframe 생성
   const iframe = document.createElement('iframe');
@@ -53,7 +54,7 @@ export async function createEditor(container, options = {}) {
   });
 
   // WASM 초기화 대기 (ready 메서드로 확인)
-  const editor = new RhwpEditor(iframe);
+  const editor = new RhwpEditor(iframe, studioOrigin);
   await editor._waitReady();
   return editor;
 }
@@ -64,12 +65,14 @@ export async function createEditor(container, options = {}) {
  * iframe 내부의 rhwp-studio와 postMessage로 통신합니다.
  */
 class RhwpEditor {
-  constructor(iframe) {
+  constructor(iframe, studioOrigin) {
     this._iframe = iframe;
+    this._studioOrigin = studioOrigin;
     this._pending = new Map();
 
     // 응답 수신 리스너
     window.addEventListener('message', (e) => {
+      if (e.origin !== this._studioOrigin || e.source !== this._iframe.contentWindow) return;
       if (e.data?.type === 'rhwp-response' && e.data.id != null) {
         const resolver = this._pending.get(e.data.id);
         if (resolver) {
@@ -94,7 +97,7 @@ class RhwpEditor {
       this._pending.set(id, { resolve, reject });
       this._iframe.contentWindow.postMessage(
         { type: 'rhwp-request', id, method, params },
-        '*'
+        this._studioOrigin
       );
       // 10초 타임아웃
       setTimeout(() => {

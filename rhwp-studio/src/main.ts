@@ -1030,23 +1030,24 @@ const initPromise = initialize();
 // 부모 페이지에서 postMessage로 에디터를 제어할 수 있다.
 // 요청: { type: 'rhwp-request', id, method, params }
 // 응답: { type: 'rhwp-response', id, result?, error? }
-window.addEventListener('message', async (e) => {
+async function handleRhwpMessage(e: MessageEvent): Promise<void> {
   const msg = e.data;
   if (!msg || typeof msg !== 'object') return;
+  if (e.source !== window.parent) return;
 
   // 기존 hwpctl-load 호환
   if (msg.type === 'hwpctl-load' && msg.data) {
     try {
       await initPromise;
       if (!await canReplaceCurrentDocument(Boolean(msg.skipUnsavedGuard))) {
-        e.source?.postMessage({ type: 'rhwp-response', id: msg.id, error: '문서 열기가 취소되었습니다.' }, { targetOrigin: '*' });
+        e.source?.postMessage({ type: 'rhwp-response', id: msg.id, error: '문서 열기가 취소되었습니다.' }, { targetOrigin: e.origin });
         return;
       }
       const bytes = new Uint8Array(msg.data);
       await loadBytes(bytes, msg.fileName || 'document.hwp', null);
-      e.source?.postMessage({ type: 'rhwp-response', id: msg.id, result: { pageCount: wasm.pageCount } }, { targetOrigin: '*' });
+      e.source?.postMessage({ type: 'rhwp-response', id: msg.id, result: { pageCount: wasm.pageCount } }, { targetOrigin: e.origin });
     } catch (err: any) {
-      e.source?.postMessage({ type: 'rhwp-response', id: msg.id, error: err.message || String(err) }, { targetOrigin: '*' });
+      e.source?.postMessage({ type: 'rhwp-response', id: msg.id, error: err.message || String(err) }, { targetOrigin: e.origin });
     }
     return;
   }
@@ -1055,7 +1056,7 @@ window.addEventListener('message', async (e) => {
   if (msg.type !== 'rhwp-request' || !msg.method) return;
   const { id, method, params } = msg;
   const reply = (result?: any, error?: string) => {
-    e.source?.postMessage({ type: 'rhwp-response', id, result, error }, { targetOrigin: '*' });
+    e.source?.postMessage({ type: 'rhwp-response', id, result, error }, { targetOrigin: e.origin });
   };
 
   try {
@@ -1102,4 +1103,6 @@ window.addEventListener('message', async (e) => {
   } catch (err: any) {
     reply(undefined, err.message || String(err));
   }
-});
+}
+
+window.addEventListener('message', handleRhwpMessage);
