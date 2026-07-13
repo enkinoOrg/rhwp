@@ -9,7 +9,9 @@
     "check": "npm --prefix rhwp-studio test && npm --prefix rhwp-studio run build",
     "deploy": "wrangler deploy",
     "deploy:dry-run": "wrangler deploy --dry-run",
-    "dev": "wrangler dev"
+    "dev": "wrangler dev",
+    "test": "npm run test:integration-guide",
+    "test:integration-guide": "node --test tests/enkino-external-integration.test.mjs"
   },
   "devDependencies": { "wrangler": "4.110.0" }
 }
