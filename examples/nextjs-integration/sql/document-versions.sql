@@ -21,15 +21,32 @@ create table if not exists public.document_versions (
   unique (document_id, version)
 );
 
+-- 즉시 삭제하지 못한 미참조 Storage object를 후속 GC가 재처리한다.
+create table if not exists public.document_storage_gc_queue (
+  id bigint generated always as identity primary key,
+  document_id uuid not null references public.documents(id),
+  storage_path text not null unique,
+  reason text not null check (reason in ('version-conflict', 'commit-failed')),
+  last_error text not null,
+  attempt_count integer not null default 0 check (attempt_count >= 0),
+  created_at timestamptz not null default now(),
+  resolved_at timestamptz
+);
+
 -- Data API가 route 권한 경계를 우회하지 못하도록 업무 테이블을 서버 전용으로 잠근다.
 alter table public.documents enable row level security;
 alter table public.document_versions enable row level security;
+alter table public.document_storage_gc_queue enable row level security;
 
 revoke all on table public.documents, public.document_versions from public;
 revoke all on table public.documents, public.document_versions from anon, authenticated;
 revoke all on table public.documents, public.document_versions from service_role;
+revoke all on table public.document_storage_gc_queue from public, anon, authenticated;
+revoke all on table public.document_storage_gc_queue from service_role;
 -- adapter는 현재 metadata 조회만 직접 수행하고, version 쓰기는 아래 security definer RPC가 담당한다.
 grant select on table public.documents to service_role;
+grant select, insert, update, delete on table public.document_storage_gc_queue to service_role;
+grant usage, select on sequence public.document_storage_gc_queue_id_seq to service_role;
 
 -- append-only version 행 수정과 삭제 차단
 create or replace function public.reject_document_version_mutation()

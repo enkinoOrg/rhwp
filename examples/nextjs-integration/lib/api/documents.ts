@@ -272,7 +272,7 @@ export async function saveDocumentFile(
       'Content-Type': 'application/haansofthwpx',
       'If-Match': formatIfMatch(input.version),
     },
-    body: input.bytes,
+    body: input.bytes.slice().buffer,
   })
 
   if (response.status === 409) {
@@ -285,5 +285,7 @@ export async function saveDocumentFile(
     throw new DocumentApiError(await readErrorMessage(response), response.status)
   }
 
-  return (await response.json()) as SaveDocumentFileResult
+  const body = (await response.json()) as { version?: number }
+
+  return { version: parseDocumentVersion(String(body.version ?? '')) }
 }

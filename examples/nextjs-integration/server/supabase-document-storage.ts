@@ -5,6 +5,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import type {
   CreateVersionResult,
   DocumentStorage,
+  type OrphanObjectRecord,
   StoredDocument,
   StoredObject,
 } from './document-repository'
@@ -92,6 +93,21 @@ export class SupabaseDocumentStorage implements DocumentStorage {
   // 경쟁 저장 실패 시 새로 만든 미참조 object 삭제
   async deleteObject(storagePath: string): Promise<void> {
     const { error } = await this.client.storage.from(this.bucketName).remove([storagePath])
+
+    if (error) throw error
+  }
+
+  // 삭제 실패 object를 durable GC queue에 기록
+  async recordOrphanObject(input: OrphanObjectRecord): Promise<void> {
+    const { error } = await this.client.from('document_storage_gc_queue').upsert(
+      {
+        document_id: input.documentId,
+        storage_path: input.storagePath,
+        reason: input.reason,
+        last_error: input.cleanupError,
+      },
+      { onConflict: 'storage_path' },
+    )
 
     if (error) throw error
   }

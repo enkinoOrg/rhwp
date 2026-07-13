@@ -23,6 +23,15 @@ export type CreateVersionResult =
   | { kind: 'saved'; version: DocumentVersion }
   | { kind: 'conflict'; currentVersion: DocumentVersion }
 
+export type HwpxArchiveValidator = (bytes: Uint8Array) => Promise<void>
+
+export interface OrphanObjectRecord {
+  documentId: string
+  storagePath: string
+  reason: 'version-conflict' | 'commit-failed'
+  cleanupError: string
+}
+
 export interface DocumentStorage {
   getDocument(documentId: string): Promise<StoredDocument | null>
   getObject(storagePath: string): Promise<StoredObject>
@@ -32,6 +41,7 @@ export interface DocumentStorage {
     contentType: string
   }): Promise<void>
   deleteObject(storagePath: string): Promise<void>
+  recordOrphanObject(input: OrphanObjectRecord): Promise<void>
   commitNewVersion(input: {
     documentId: string
     expectedVersion: DocumentVersion
@@ -50,9 +60,11 @@ export interface DocumentFile extends StoredObject {
 // 문서 metadata와 private Storage를 조합하는 저장소
 export class DocumentRepository {
   private readonly storage: DocumentStorage
+  private readonly validateHwpxArchive: HwpxArchiveValidator
 
-  constructor(storage: DocumentStorage) {
+  constructor(storage: DocumentStorage, validateHwpxArchive: HwpxArchiveValidator) {
     this.storage = storage
+    this.validateHwpxArchive = validateHwpxArchive
   }
 
   // 현재 HWPX 원본 조회
@@ -76,6 +88,8 @@ export class DocumentRepository {
       return { kind: 'conflict', currentVersion: document.version }
     }
 
+    await this.validateHwpxArchive(input.bytes)
+
     const nextVersion = document.version + 1
     const storagePath = this.createStoragePath(input.documentId, nextVersion)
 
@@ -86,18 +100,25 @@ export class DocumentRepository {
       contentType: 'application/haansofthwpx',
     })
 
-    const result = await this.storage.commitNewVersion({
-      documentId: input.documentId,
-      expectedVersion: input.expectedVersion,
-      nextVersion,
-      storagePath,
-      byteSize: input.bytes.byteLength,
-      actorId: input.actorId,
-    })
+    let result: CreateVersionResult
+
+    try {
+      result = await this.storage.commitNewVersion({
+        documentId: input.documentId,
+        expectedVersion: input.expectedVersion,
+        nextVersion,
+        storagePath,
+        byteSize: input.bytes.byteLength,
+        actorId: input.actorId,
+      })
+    } catch (error) {
+      await this.cleanupOrphanObject(input.documentId, storagePath, 'commit-failed')
+      throw error
+    }
 
     if (result.kind === 'conflict') {
       // 경쟁 저장에서 남은 미참조 object만 정리한다.
-      await this.cleanupOrphanObject(storagePath)
+      await this.cleanupOrphanObject(input.documentId, storagePath, 'version-conflict')
     }
 
     return result
@@ -109,11 +130,28 @@ export class DocumentRepository {
   }
 
   // 실패해도 version 충돌 응답을 유지하는 고아 object 정리
-  private async cleanupOrphanObject(storagePath: string): Promise<void> {
+  private async cleanupOrphanObject(
+    documentId: string,
+    storagePath: string,
+    reason: OrphanObjectRecord['reason'],
+  ): Promise<void> {
     try {
       await this.storage.deleteObject(storagePath)
-    } catch (error) {
-      console.error('고아 HWPX object 정리 실패: GC 대상으로 남김', { storagePath, error })
+    } catch (cleanupError) {
+      try {
+        await this.storage.recordOrphanObject({
+          documentId,
+          storagePath,
+          reason,
+          cleanupError: String(cleanupError),
+        })
+      } catch (recordError) {
+        console.error('고아 HWPX object durable GC 기록 실패', {
+          storagePath,
+          cleanupError,
+          recordError,
+        })
+      }
     }
   }
 }

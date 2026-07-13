@@ -52,9 +52,26 @@ test('공통 예제는 version을 quoted ETag If-Match 헤더로 직렬화한다
   const source = readFileSync('examples/external-integration/rhwp-client.ts', 'utf8')
   const readme = readFileSync('examples/external-integration/README.md', 'utf8')
 
-  assert.match(source, /'If-Match': `"\$\{String\(input\.version\)\}"`/)
+  assert.match(source, /'If-Match': formatIfMatch\(input\.version\)/)
   assert.doesNotMatch(source, /'If-Match': String\(input\.version\)/)
   assert.match(readme, /If-Match.*"3"/)
+})
+
+test('공통 예제는 파일명과 canonical safe integer version을 Next.js 계약처럼 해석한다', () => {
+  const source = readFileSync('examples/external-integration/rhwp-client.ts', 'utf8')
+
+  assert.match(source, /export async function getHwpxDocument/)
+  assert.match(source, /decodeURIComponent\(encodedFileName\)/)
+  assert.match(source, /\^\(0\|\[1-9\]\\d\*\)\$/)
+  assert.match(source, /Number\.isSafeInteger\(version\)/)
+})
+
+test('공통 예제는 non-canonical 또는 unsafe version으로 저장 요청을 만들지 않는다', () => {
+  const source = readFileSync('examples/external-integration/rhwp-client.ts', 'utf8')
+
+  assert.match(source, /function formatIfMatch/)
+  assert.match(source, /!Number\.isSafeInteger\(version\)/)
+  assert.match(source, /'If-Match': formatIfMatch\(input\.version\)/)
 })
 
 test('공통 예제 README는 조회 API의 권한 검증과 IDOR 방어를 설명한다', () => {
@@ -141,8 +158,8 @@ test('경쟁 저장 정리 실패는 409을 보존하고 RPC는 service_role에�
     'utf8',
   )
 
-  assert.match(repository, /await this\.cleanupOrphanObject\(storagePath\)/)
-  assert.match(repository, /console\.error\('고아 HWPX object 정리 실패: GC 대상으로 남김'/)
+  assert.match(repository, /await this\.cleanupOrphanObject\(input\.documentId, storagePath/)
+  assert.match(repository, /recordOrphanObject/)
   assert.match(
     repository,
     /private async cleanupOrphanObject[\s\S]*try \{[\s\S]*await this\.storage\.deleteObject\(storagePath\)[\s\S]*\} catch/,
@@ -158,9 +175,68 @@ test('HwpxEditor 예제는 generation과 callback ref로 이전 비동기 작업
 
   assert.match(editor, /const generationRef = useRef\(0\)/)
   assert.match(editor, /const onErrorRef = useRef\(onError\)/)
+  assert.match(editor, /const saveMutexRef = useRef\(false\)/)
   assert.match(editor, /generationRef\.current !== generation/)
   assert.match(editor, /onErrorRef\.current\?\./)
   assert.match(editor, /\}, \[documentId\]\)/)
+  assert.doesNotMatch(editor, /onInput=/)
+  assert.doesNotMatch(editor, /beforeunload/)
+  assert.doesNotMatch(editor, /isDirty/)
+  assert.match(editor, /disabled=\{isSaving\}/)
+})
+
+test('예제 문서는 change API 전까지 수동 저장 모델만 보장한다고 명시한다', () => {
+  const commonReadme = readFileSync('examples/external-integration/README.md', 'utf8')
+  const nextReadme = readFileSync('examples/nextjs-integration/README.md', 'utf8')
+
+  for (const readme of [commonReadme, nextReadme]) {
+    assert.match(readme, /iframe/)
+    assert.match(readme, /change event API/)
+    assert.match(readme, /수동 저장/)
+    assert.match(readme, /dirty.*이탈 경고/)
+  }
+})
+
+test('Next.js 가이드는 필수 HWPX 구조 validator와 제한 계약을 설명한다', () => {
+  const route = readFileSync(
+    'examples/nextjs-integration/app/api/documents/[documentId]/file/route.ts',
+    'utf8',
+  )
+  const readme = readFileSync('examples/nextjs-integration/README.md', 'utf8')
+
+  assert.match(route, /validateHwpxArchive/)
+  assert.doesNotMatch(route, /bytes\[0\].*0x50/)
+
+  for (const contract of [
+    'mimetype',
+    'version.xml',
+    'Contents/content.hpf',
+    'Contents/section0.xml',
+    'META-INF/manifest.xml',
+    'entry 수',
+    '경로',
+    'uncompressed',
+    'XML',
+  ]) {
+    assert.match(readme, new RegExp(contract.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+  }
+})
+
+test('Next.js 가이드는 conflict를 onError로 전달하고 durable GC queue를 운영한다고 설명한다', () => {
+  const readme = readFileSync('examples/nextjs-integration/README.md', 'utf8')
+  const storage = readFileSync(
+    'examples/nextjs-integration/server/supabase-document-storage.ts',
+    'utf8',
+  )
+  const sql = readFileSync(
+    'examples/nextjs-integration/sql/document-versions.sql',
+    'utf8',
+  )
+
+  assert.match(readme, /DocumentVersionConflictError.*onError/)
+  assert.match(readme, /document_storage_gc_queue/)
+  assert.match(storage, /recordOrphanObject/)
+  assert.match(sql, /document_storage_gc_queue/)
 })
 
 // 테이블 Data API 우회 차단과 streaming body 제한 계약 확인
@@ -211,6 +287,21 @@ test('한글 파일명의 download header는 실제 Headers와 Response에서 By
   assert.equal(result.fileName, '%EA%B2%BD%EA%B8%B0%20%EC%98%88%EC%88%A0%20%EA%B3%84%ED%9A%8D.hwpx')
 })
 
+test('Next.js 저장 응답도 canonical safe integer version만 허용한다', () => {
+  const url = moduleUrl('examples/nextjs-integration/lib/api/documents.ts')
+  const output = runTypeScriptModule(`
+    globalThis.fetch = async () => Response.json({ version: Number.MAX_SAFE_INTEGER + 1 })
+    const { saveDocumentFile } = await import(${JSON.stringify(url)})
+    try {
+      await saveDocumentFile('document-1', { bytes: new Uint8Array([1]), version: 0 })
+    } catch (error) {
+      console.log(error.message)
+    }
+  `)
+
+  assert.equal(output, '서버가 유효하지 않은 문서 version을 반환했습니다.')
+})
+
 // cleanup 실패가 conflict 반환을 throw로 바꾸지 않는지 확인
 test('고아 object cleanup 실패에도 repository는 conflict 결과를 반환한다', () => {
   const url = moduleUrl('examples/nextjs-integration/server/document-repository.ts')
@@ -227,11 +318,12 @@ test('고아 object cleanup 실패에도 repository는 conflict 결과를 반환
       async deleteObject() {
         throw new Error('cleanup failed')
       },
+      async recordOrphanObject() {},
       async commitNewVersion() {
         return { kind: 'conflict', currentVersion: 1 }
       },
     }
-    const repository = new DocumentRepository(storage)
+    const repository = new DocumentRepository(storage, async () => {})
     const originalError = console.error
     console.error = () => {}
     const result = await repository.createVersion({
@@ -245,6 +337,89 @@ test('고아 object cleanup 실패에도 repository는 conflict 결과를 반환
   `)
 
   assert.deepEqual(JSON.parse(output), { kind: 'conflict', currentVersion: 1 })
+})
+
+test('commit throw 뒤 cleanup을 시도하고 cleanup 실패를 기록해도 원 오류를 보존한다', () => {
+  const url = moduleUrl('examples/nextjs-integration/server/document-repository.ts')
+  const output = runTypeScriptModule(`
+    const { DocumentRepository } = await import(${JSON.stringify(url)})
+    const commitError = new Error('commit failed')
+    let cleanupAttempts = 0
+    let gcRecord
+    const storage = {
+      async getDocument() {
+        return { id: 'document-1', fileName: 'document.hwpx', version: 0, storagePath: 'current.hwpx' }
+      },
+      async getObject() { throw new Error('not used') },
+      async putObject() {},
+      async deleteObject() {
+        cleanupAttempts += 1
+        throw new Error('cleanup failed')
+      },
+      async recordOrphanObject(input) { gcRecord = input },
+      async commitNewVersion() { throw commitError },
+    }
+    const repository = new DocumentRepository(storage, async () => {})
+    const originalError = console.error
+    console.error = () => {}
+    let sameError = false
+    try {
+      await repository.createVersion({
+        documentId: 'document-1',
+        expectedVersion: 0,
+        bytes: new Uint8Array([1]),
+        actorId: 'actor-1',
+      })
+    } catch (error) {
+      sameError = error === commitError
+    }
+    console.error = originalError
+    console.log(JSON.stringify({ cleanupAttempts, gcReason: gcRecord?.reason, sameError }))
+  `)
+
+  assert.deepEqual(JSON.parse(output), {
+    cleanupAttempts: 1,
+    gcReason: 'commit-failed',
+    sameError: true,
+  })
+})
+
+test('HWPX 구조 validator가 성공하기 전에는 object를 업로드하지 않는다', () => {
+  const url = moduleUrl('examples/nextjs-integration/server/document-repository.ts')
+  const output = runTypeScriptModule(`
+    const { DocumentRepository } = await import(${JSON.stringify(url)})
+    let putCalled = false
+    const storage = {
+      async getDocument() {
+        return { id: 'document-1', fileName: 'document.hwpx', version: 0, storagePath: 'current.hwpx' }
+      },
+      async getObject() { throw new Error('not used') },
+      async putObject() { putCalled = true },
+      async deleteObject() {},
+      async recordOrphanObject() {},
+      async commitNewVersion() { return { kind: 'saved', version: 1 } },
+    }
+    const repository = new DocumentRepository(storage, async () => {
+      throw new Error('invalid archive')
+    })
+    let message
+    try {
+      await repository.createVersion({
+        documentId: 'document-1',
+        expectedVersion: 0,
+        bytes: new Uint8Array([80, 75, 3, 4]),
+        actorId: 'actor-1',
+      })
+    } catch (error) {
+      message = error.message
+    }
+    console.log(JSON.stringify({ message, putCalled }))
+  `)
+
+  assert.deepEqual(JSON.parse(output), {
+    message: 'invalid archive',
+    putCalled: false,
+  })
 })
 
 // chunked body가 제한을 넘으면 즉시 취소하고 413으로 분류하는지 확인

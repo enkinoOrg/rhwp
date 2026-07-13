@@ -25,11 +25,10 @@ export function HwpxEditor({
   const containerRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<RhwpEditor | null>(null)
   const versionRef = useRef<DocumentVersion | null>(null)
-  const dirtyRef = useRef(false)
+  const saveMutexRef = useRef(false)
   const generationRef = useRef(0)
   const onErrorRef = useRef(onError)
   const onSavedRef = useRef(onSaved)
-  const [isDirty, setIsDirty] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
 
   // 최신 오류 callback 유지
@@ -41,12 +40,6 @@ export function HwpxEditor({
   useEffect(() => {
     onSavedRef.current = onSaved
   }, [onSaved])
-
-  // dirty 상태를 갱신하고 페이지 이탈 경고에 반영
-  const markDirty = useCallback(() => {
-    dirtyRef.current = true
-    setIsDirty(true)
-  }, [])
 
   // 문서 ID 변경 시 editor 생성, 파일 로드, 리소스 정리
   useEffect(() => {
@@ -86,8 +79,7 @@ export function HwpxEditor({
         if (!isCurrentGeneration()) return
 
         versionRef.current = document.version
-        dirtyRef.current = false
-        setIsDirty(false)
+        saveMutexRef.current = false
         setIsSaving(false)
       } catch (error) {
         if (isCurrentGeneration()) {
@@ -103,8 +95,7 @@ export function HwpxEditor({
         generationRef.current += 1
         editorRef.current = null
         versionRef.current = null
-        dirtyRef.current = false
-        setIsDirty(false)
+        saveMutexRef.current = false
         setIsSaving(false)
       }
 
@@ -112,29 +103,15 @@ export function HwpxEditor({
     }
   }, [documentId])
 
-  // 저장되지 않은 편집본의 페이지 이탈 경고
-  useEffect(() => {
-    // beforeunload 경고 처리
-    function warnBeforeUnload(event: BeforeUnloadEvent) {
-      if (!dirtyRef.current) return
-
-      event.preventDefault()
-      event.returnValue = ''
-    }
-
-    window.addEventListener('beforeunload', warnBeforeUnload)
-
-    return () => window.removeEventListener('beforeunload', warnBeforeUnload)
-  }, [])
-
   // editor export 결과를 현재 version 기준으로 저장
   const save = useCallback(async () => {
     const editor = editorRef.current
     const version = versionRef.current
     const generation = generationRef.current
 
-    if (!editor || version === null || isSaving) return
+    if (!editor || version === null || saveMutexRef.current) return
 
+    saveMutexRef.current = true
     setIsSaving(true)
 
     try {
@@ -144,8 +121,6 @@ export function HwpxEditor({
       if (generationRef.current !== generation || editorRef.current !== editor) return
 
       versionRef.current = result.version
-      dirtyRef.current = false
-      setIsDirty(false)
       onSavedRef.current?.(result.version)
     } catch (error) {
       if (generationRef.current === generation && editorRef.current === editor) {
@@ -153,19 +128,16 @@ export function HwpxEditor({
       }
     } finally {
       if (generationRef.current === generation && editorRef.current === editor) {
+        saveMutexRef.current = false
         setIsSaving(false)
       }
     }
-  }, [documentId, isSaving])
+  }, [documentId])
 
   return (
     <section aria-busy={isSaving}>
-      <div
-        ref={containerRef}
-        onInput={markDirty}
-        style={{ height: '720px' }}
-      />
-      <button type="button" disabled={!isDirty || isSaving} onClick={save}>
+      <div ref={containerRef} style={{ height: '720px' }} />
+      <button type="button" disabled={isSaving} onClick={save}>
         {isSaving ? '저장 중...' : '저장'}
       </button>
     </section>

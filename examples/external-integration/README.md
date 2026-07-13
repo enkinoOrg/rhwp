@@ -25,6 +25,7 @@ npm install @rhwp/editor
 ```ts
 import {
   createRhwpDocumentSession,
+  getHwpxDocument,
   saveHwpxDocument,
 } from './rhwp-client'
 
@@ -38,18 +39,8 @@ async function openDocument() {
 
   session = await createRhwpDocumentSession({
     container: '#rhwp-editor',
-    async fetchDocument() {
-      const response = await fetch(`/api/documents/${documentId}/file`)
-
-      if (!response.ok) {
-        throw new Error(`문서를 불러오지 못했습니다. (${response.status})`)
-      }
-
-      return {
-        bytes: await response.arrayBuffer(),
-        fileName: response.headers.get('X-Document-File-Name') ?? 'document.hwpx',
-        version: response.headers.get('X-Document-Version') ?? '0',
-      }
+    fetchDocument() {
+      return getHwpxDocument(`/api/documents/${documentId}/file`)
     },
     saveDocument(input) {
       return saveHwpxDocument(`/api/documents/${documentId}/file`, input)
@@ -68,6 +59,14 @@ async function saveDocument() {
 조회 API도 매 요청마다 사용자의 세션과 문서별 read 권한을 서버에서 검증해야 합니다. 세션이 없으면 `401 Unauthorized`, 문서 접근 권한이 없으면 `403 Forbidden`을 반환합니다. URL의 문서 ID만 바꿔 다른 문서를 읽을 수 있으면 IDOR(Insecure Direct Object Reference) 취약점이 되므로, 클라이언트가 보낸 ID만 신뢰하지 말고 세션의 사용자와 대상 문서의 권한을 함께 확인해야 합니다.
 
 저장 API는 요청마다 사용자의 세션과 문서 수정 권한을 검증해야 합니다. 숫자 version `3`은 저장 요청에서 quoted ETag 형식인 `If-Match: "3"`으로 전송해야 합니다. 서버는 이 기준 version이 현재 version과 다르면 `409 Conflict`를 반환하고 기존 HWPX를 덮어쓰지 않아야 합니다. session은 저장 성공 응답의 version을 다음 저장 기준으로 사용합니다.
+
+`X-Document-File-Name`은 `encodeURIComponent` 값으로 보내고 `getHwpxDocument`가 `decodeURIComponent`로 복원합니다. 조회/저장 version은 선행 0 없는 canonical nonnegative safe integer만 허용하며, 잘못된 응답 version이나 unsafe integer로는 다음 저장을 진행하지 않습니다.
+
+## 수동 저장 모델
+
+현재 SDK에는 iframe 내부 편집 변경을 부모 페이지로 알리는 change event API가 없습니다. 따라서 editor 컨테이너의 `onInput`으로 dirty 상태를 감지할 수 없고, 이 예제는 dirty 기반 저장 버튼 비활성화나 이탈 경고를 제공하지 않습니다. change event API가 추가되기 전까지 사용자가 저장 버튼을 직접 누르는 수동 저장 모델이며, 저장하지 않은 편집본의 보존을 보장하지 않습니다.
+
+저장 중에는 중복 저장만 막고 평상시 저장 버튼은 항상 사용할 수 있게 둡니다. 자동 저장이나 dirty 기반 이탈 경고가 필요하면 SDK의 공식 change event API가 제공된 뒤 그 신호를 기준으로 구현해야 합니다.
 
 ## 생명주기 정리
 

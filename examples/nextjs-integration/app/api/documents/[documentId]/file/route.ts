@@ -13,11 +13,15 @@ import {
   assertCanReadDocument,
   requireSession,
 } from '@/server/auth/document-access'
+import { validateHwpxArchive } from '@/server/security/hwpx-archive-validator'
 
 const HWPX_CONTENT_TYPE = 'application/haansofthwpx'
 export const MAX_HWPX_BYTES = 50 * 1024 * 1024
 
-const repository = new DocumentRepository(new SupabaseDocumentStorage())
+const repository = new DocumentRepository(
+  new SupabaseDocumentStorage(),
+  validateHwpxArchive,
+)
 
 interface RouteContext {
   params: Promise<{ documentId: string }>
@@ -52,7 +56,7 @@ function parseExpectedVersion(headers: Headers): number {
   return version
 }
 
-// HWPX MIME type, 크기, ZIP signature 검사
+// 구조 검증 전 HWPX 전송 형식과 크기 검사
 function validateHwpx(request: NextRequest, bytes: Uint8Array): void {
   if (request.headers.get('content-type')?.split(';')[0] !== HWPX_CONTENT_TYPE) {
     throw new RequestValidationError('HWPX Content-Type이 필요합니다.')
@@ -61,14 +65,6 @@ function validateHwpx(request: NextRequest, bytes: Uint8Array): void {
   if (bytes.byteLength === 0 || bytes.byteLength > MAX_HWPX_BYTES) {
     throw new RequestValidationError('HWPX 파일 크기가 허용 범위를 벗어났습니다.', 413)
   }
-
-  const isZip =
-    bytes[0] === 0x50 &&
-    bytes[1] === 0x4b &&
-    bytes[2] === 0x03 &&
-    bytes[3] === 0x04
-
-  if (!isZip) throw new RequestValidationError('HWPX ZIP signature가 유효하지 않습니다.')
 }
 
 // 문서 원본을 private Storage에서 읽어 반환
