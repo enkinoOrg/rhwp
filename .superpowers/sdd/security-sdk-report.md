@@ -49,3 +49,58 @@
 - `.superpowers/sdd/security-sdk-report.md`
 
 작업 트리에 있던 `examples/**` 및 `tests/enkino-external-integration.test.mjs` 변경은 수정하거나 커밋 대상에 포함하지 않았다.
+
+## SDK 후속 배포 준비
+
+### upstream 및 npm 0.7.18 비교
+
+- npm registry의 `@rhwp/editor@latest`가 `0.7.18`임을 확인했다.
+- npm registry에 `0.7.19`가 존재하지 않아 새 보안 버전으로 사용할 수 있음을 확인했다.
+- upstream `v0.7.18` 태그와 npm `0.7.18` tarball을 받아 전체 SDK 파일을 recursive diff한 결과 차이가 없었다.
+- 로컬 SDK와 `0.7.18`의 차이는 기존 origin/source 보안 패치와 package version뿐이었다.
+- upstream의 `README.md`, `index.d.ts`, 공개 API는 변경 없이 보존했다.
+
+모든 registry 및 upstream 조회 명령은 `rtk proxy`를 통해 실행했으며, 배포나 npm publish는 실행하지 않았다.
+
+### lifecycle 결함 원인
+
+- message listener가 익명 함수여서 `destroy()`에서 제거할 수 없었다.
+- pending 요청이 timer handle을 보존하지 않아 성공·실패 응답 후에도 10초 timer가 남았다.
+- `destroy()`가 pending map만 비워 Promise를 resolve/reject하지 않았고 timer도 해제하지 않았다.
+- destroy 후 메서드를 다시 호출하면 제거된 iframe으로 요청을 보낼 수 있었다.
+
+### 후속 TDD
+
+RED 단계에서 다음 실패를 확인했다.
+
+- 정상 ready 응답 후 active timer가 `1`로 남았다.
+- destroy 후 pending Promise가 rejected가 아니라 pending 상태로 유지됐다.
+- package version이 `0.7.17`이었다.
+- root test/check 및 npm publish workflow에 SDK 테스트 진입점이 없었다.
+
+GREEN 단계에서 다음 동작을 확인했다.
+
+- 성공·실패 응답 모두 pending timer를 즉시 해제한다.
+- destroy가 message listener를 제거하고 모든 pending timer를 해제한 뒤 요청을 `Editor destroyed` 오류로 reject한다.
+- destroy는 중복 호출해도 iframe 제거와 reject를 반복하지 않는다.
+- destroy 후 API 재사용은 postMessage 없이 즉시 reject한다.
+- `@rhwp/editor` version을 `0.7.19`로 올렸다.
+- root `npm test`, `npm run check`, `publish-npm-editor` job이 `npm run test:sdk`를 실행한다.
+
+### 후속 검증
+
+- `node --test npm/editor/index.test.mjs`: 5개 통과
+- `npm run check`: SDK 5개, Studio 150개 및 production build 통과
+- `npm test`: SDK 5개 및 외부 연동 통합 테스트 30개 통과
+- `npm pack --dry-run`: `rhwp-editor-0.7.19.tgz` 구성 확인
+
+README와 외부 연동 가이드의 최소 SDK 버전 표기는 별도 작업 범위이므로 수정하지 않았다.
+
+### 후속 변경 범위
+
+- `npm/editor/index.js`
+- `npm/editor/index.test.mjs`
+- `npm/editor/package.json`
+- `package.json`
+- `.github/workflows/npm-publish.yml`
+- `.superpowers/sdd/security-sdk-report.md`

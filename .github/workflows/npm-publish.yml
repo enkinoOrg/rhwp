@@ -100,6 +100,9 @@ jobs:
           node-version: 24
           package-manager-cache: false
 
+      - name: Test SDK
+        run: npm run test:sdk
+
       - name: Publish to npm
         working-directory: npm/editor
         run: |

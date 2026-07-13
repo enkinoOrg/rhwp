@@ -69,22 +69,25 @@ class RhwpEditor {
     this._iframe = iframe;
     this._studioOrigin = studioOrigin;
     this._pending = new Map();
+    this._destroyed = false;
 
     // 응답 수신 리스너
-    window.addEventListener('message', (e) => {
+    this._handleMessage = (e) => {
       if (e.origin !== this._studioOrigin || e.source !== this._iframe.contentWindow) return;
       if (e.data?.type === 'rhwp-response' && e.data.id != null) {
-        const resolver = this._pending.get(e.data.id);
-        if (resolver) {
+        const pending = this._pending.get(e.data.id);
+        if (pending) {
           this._pending.delete(e.data.id);
+          clearTimeout(pending.timer);
           if (e.data.error) {
-            resolver.reject(new Error(e.data.error));
+            pending.reject(new Error(e.data.error));
           } else {
-            resolver.resolve(e.data.result);
+            pending.resolve(e.data.result);
           }
         }
       }
-    });
+    };
+    window.addEventListener('message', this._handleMessage);
   }
 
   /**
@@ -92,20 +95,24 @@ class RhwpEditor {
    * @internal
    */
   _request(method, params = {}) {
+    if (this._destroyed) {
+      return Promise.reject(new Error('Editor destroyed'));
+    }
+
     return new Promise((resolve, reject) => {
       const id = ++requestId;
-      this._pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        const pending = this._pending.get(id);
+        if (pending) {
+          this._pending.delete(id);
+          pending.reject(new Error(`Request timeout: ${method}`));
+        }
+      }, 10000);
+      this._pending.set(id, { resolve, reject, timer });
       this._iframe.contentWindow.postMessage(
         { type: 'rhwp-request', id, method, params },
         this._studioOrigin
       );
-      // 10초 타임아웃
-      setTimeout(() => {
-        if (this._pending.has(id)) {
-          this._pending.delete(id);
-          reject(new Error(`Request timeout: ${method}`));
-        }
-      }, 10000);
     });
   }
 
@@ -200,7 +207,14 @@ class RhwpEditor {
    * 에디터를 제거합니다.
    */
   destroy() {
-    this._iframe.remove();
+    if (this._destroyed) return;
+    this._destroyed = true;
+    window.removeEventListener('message', this._handleMessage);
+    for (const pending of this._pending.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(new Error('Editor destroyed'));
+    }
     this._pending.clear();
+    this._iframe.remove();
   }
 }

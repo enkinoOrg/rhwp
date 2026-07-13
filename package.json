@@ -6,11 +6,12 @@
     "build": "npm run build:wasm && npm run build:studio",
     "build:wasm": "wasm-pack build --target web",
     "build:studio": "npm --prefix rhwp-studio ci && npm --prefix rhwp-studio run build",
-    "check": "npm --prefix rhwp-studio test && npm --prefix rhwp-studio run build",
+    "check": "npm run test:sdk && npm --prefix rhwp-studio test && npm --prefix rhwp-studio run build",
     "deploy": "wrangler deploy",
     "deploy:dry-run": "wrangler deploy --dry-run",
     "dev": "wrangler dev",
-    "test": "npm run test:integration-guide",
+    "test": "npm run test:sdk && npm run test:integration-guide",
+    "test:sdk": "node --test npm/editor/index.test.mjs",
     "test:integration-guide": "node --test tests/enkino-external-integration.test.mjs"
   },
   "devDependencies": { "wrangler": "4.110.0" }
