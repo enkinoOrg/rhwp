@@ -39,7 +39,7 @@ export async function saveHwpxDocument(
     method: 'PUT',
     headers: {
       'Content-Type': 'application/haansofthwpx',
-      'If-Match': String(input.version),
+      'If-Match': `"${String(input.version)}"`,
     },
     body: input.bytes,
   })
