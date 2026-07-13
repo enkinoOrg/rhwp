@@ -33,6 +33,9 @@ let session: Awaited<ReturnType<typeof createRhwpDocumentSession>> | undefined
 
 // 편집 세션 시작 함수
 async function openDocument() {
+  session?.destroy()
+  session = undefined
+
   session = await createRhwpDocumentSession({
     container: '#rhwp-editor',
     async fetchDocument() {
@@ -62,7 +65,9 @@ async function saveDocument() {
 }
 ```
 
-저장 API는 요청마다 사용자의 세션과 문서 수정 권한을 검증해야 합니다. `If-Match`의 기준 version이 현재 version과 다르면 `409 Conflict`를 반환하고 기존 HWPX를 덮어쓰지 않아야 합니다.
+조회 API도 매 요청마다 사용자의 세션과 문서별 read 권한을 서버에서 검증해야 합니다. 세션이 없으면 `401 Unauthorized`, 문서 접근 권한이 없으면 `403 Forbidden`을 반환합니다. URL의 문서 ID만 바꿔 다른 문서를 읽을 수 있으면 IDOR(Insecure Direct Object Reference) 취약점이 되므로, 클라이언트가 보낸 ID만 신뢰하지 말고 세션의 사용자와 대상 문서의 권한을 함께 확인해야 합니다.
+
+저장 API는 요청마다 사용자의 세션과 문서 수정 권한을 검증해야 합니다. `If-Match`의 기준 version이 현재 version과 다르면 `409 Conflict`를 반환하고 기존 HWPX를 덮어쓰지 않아야 합니다. session은 저장 성공 응답의 version을 다음 저장 기준으로 사용합니다.
 
 ## 생명주기 정리
 

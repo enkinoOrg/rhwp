@@ -60,16 +60,28 @@ export async function createRhwpDocumentSession(
     width: '100%',
     height: '100%',
   })
-  const response = await options.fetchDocument()
 
-  await editor.loadFile(response.bytes, response.fileName)
+  let response: FetchDocumentResult
+
+  try {
+    response = await options.fetchDocument()
+    await editor.loadFile(response.bytes, response.fileName)
+  } catch (error) {
+    editor.destroy()
+    throw error
+  }
+
+  let currentVersion = response.version
 
   return {
     // 편집 결과 저장 함수
     async save() {
       const bytes = await editor.exportHwpx()
+      const result = await options.saveDocument({ bytes, version: currentVersion })
 
-      return options.saveDocument({ bytes, version: response.version })
+      currentVersion = result.version
+
+      return result
     },
     // 편집기 리소스 해제 함수
     destroy() {
