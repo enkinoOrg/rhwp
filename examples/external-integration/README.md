@@ -5,10 +5,12 @@
 ## 설치
 
 ```bash
-npm install @rhwp/editor@^0.7.19
+mkdir -p vendor/rhwp-editor
+curl -fsSL https://raw.githubusercontent.com/enkinoOrg/rhwp/e6dc2f5746f18880521406de76ae0b636e96551e/npm/editor/index.js -o vendor/rhwp-editor/index.js
+curl -fsSL https://raw.githubusercontent.com/enkinoOrg/rhwp/e6dc2f5746f18880521406de76ae0b636e96551e/npm/editor/index.d.ts -o vendor/rhwp-editor/index.d.ts
 ```
 
-보안 검증이 반영된 SDK 최소 버전은 `0.7.19`입니다. `rhwp-client.ts`를 프로젝트에 복사하거나 해당 파일을 기준으로 연동 코드를 작성합니다.
+보안 검증이 반영된 기준은 고정 커밋 `e6dc2f57`입니다. npm `0.7.19`는 실제 발행을 확인한 뒤에만 사용합니다. `rhwp-client.ts`를 프로젝트에 복사하거나 해당 파일을 기준으로 연동 코드를 작성합니다.
 
 ## 컨테이너
 

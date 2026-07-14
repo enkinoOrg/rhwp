@@ -9,10 +9,13 @@ RHWP Studio URL은 `https://rhwp.enkinokorea.workers.dev/`입니다. Studio에�
 ## 필요한 패키지와 환경 변수
 
 ```bash
-npm install @rhwp/editor@^0.7.19 @supabase/supabase-js fast-xml-parser@^5.10.0
+npm install @supabase/supabase-js fast-xml-parser@^5.10.0
+mkdir -p vendor/rhwp-editor
+curl -fsSL https://raw.githubusercontent.com/enkinoOrg/rhwp/e6dc2f5746f18880521406de76ae0b636e96551e/npm/editor/index.js -o vendor/rhwp-editor/index.js
+curl -fsSL https://raw.githubusercontent.com/enkinoOrg/rhwp/e6dc2f5746f18880521406de76ae0b636e96551e/npm/editor/index.d.ts -o vendor/rhwp-editor/index.d.ts
 ```
 
-iframe 메시지 origin/source 검증과 요청 정리 계약이 반영된 SDK 최소 버전은 `0.7.19`입니다.
+iframe 메시지 origin/source 검증과 요청 정리 계약이 반영된 기준은 고정 커밋 `e6dc2f57`입니다. npm `0.7.19`는 실제 발행을 확인한 뒤에만 사용합니다.
 
 서버 환경 변수만 설정합니다. `SUPABASE_SERVICE_ROLE_KEY`는 브라우저 코드와 `NEXT_PUBLIC_*` 변수에 두지 않습니다.
 
