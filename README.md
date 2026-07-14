@@ -2,7 +2,7 @@
 >
 > 이 저장소는 upstream RHWP를 기반으로 Enkino 프로젝트가 공용으로 사용하는 Studio를 배포한다.
 > 운영 주소는 `https://rhwp.enkinokorea.workers.dev`이며, 로컬 글꼴 감지 권한 안내 없이 대체 글꼴로 표시한다.
-> 외부 iframe 연동은 보안 수정 커밋 `e6dc2f57`의 SDK를 vendor해서 사용한다. npm `0.7.19`는 발행 완료 후에만 사용한다.
+> 외부 iframe 연동은 transferable 바이너리 커밋 `9fc2bcbda1f5787c60b89244d01b4ff80e3adeab`의 SDK를 vendor해서 사용한다. npm `0.7.19`는 발행 완료 후에만 사용한다.
 > 자세한 내용은 [아키텍처](docs/tech/architecture.md), [외부 프로젝트 연동 가이드](docs/tech/integration-guide.md), [빌드 및 배포](docs/tech/deployment.md), [upstream 동기화](docs/tech/upstream-sync.md)를 참고한다.
 
 <p align="center">

@@ -23,3 +23,14 @@
 ## 수동 acceptance 상태
 
 이 작업에서는 배포하지 않았다. 인증된 브라우저/CORS 통합과 Hancom Office 열기 검증도 실행하지 않았으며 통과로 표시하지 않는다.
+
+## 소비자 provenance 후속 정정
+
+- 활성 README와 외부 프로젝트 연동 가이드의 vendor 기준을 transferable 바이너리 커밋 `9fc2bcbda1f5787c60b89244d01b4ff80e3adeab`로 통일했다.
+- 이전 보안 기준 `e6dc2f5746f18880521406de76ae0b636e96551e`는 transferable 프로토콜 적용 전의 역사적 기준이며 현재 소비자 pin은 위 커밋으로 대체됐다.
+- 연동 가이드의 `index.js`와 `index.d.ts` 다운로드 명령도 같은 전체 SHA를 사용한다.
+
+## provenance 검증
+
+- `rtk npm run test:integration-guide`: 32개 테스트 통과.
+- `rtk grep -n "e6dc2f\|9fc2bcb" README.md docs/tech/integration-guide.md`: 활성 소비자 문서에서 현재 SHA 4건을 확인했고 이전 SHA는 없었다.
