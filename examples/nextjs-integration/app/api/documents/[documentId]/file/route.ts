@@ -7,6 +7,7 @@ import {
   readBodyWithinLimit,
 } from '../../../../../lib/api/documents'
 import { DocumentRepository } from '../../../../../server/document-repository'
+import { secureXmlParser } from '../../../../../server/fast-xml-parser-adapter'
 import { SupabaseDocumentStorage } from '../../../../../server/supabase-document-storage'
 import {
   createHwpxArchiveValidator,
@@ -22,7 +23,7 @@ import { zipInspector } from '@/server/security/zip-inspector'
 const HWPX_CONTENT_TYPE = 'application/haansofthwpx'
 export const MAX_HWPX_BYTES = 50 * 1024 * 1024
 
-const validateHwpxArchive = createHwpxArchiveValidator(zipInspector)
+const validateHwpxArchive = createHwpxArchiveValidator(zipInspector, secureXmlParser)
 const repository = new DocumentRepository(new SupabaseDocumentStorage(), validateHwpxArchive)
 
 interface RouteContext {

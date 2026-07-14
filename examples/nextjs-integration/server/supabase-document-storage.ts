@@ -10,6 +10,7 @@ import type {
   StoredObject,
   VersionCommitReference,
   VersionCommitStatus,
+  VersionCommitInput,
 } from './document-repository'
 
 const DEFAULT_DOCUMENT_BUCKET = 'documents'
@@ -110,6 +111,7 @@ export class SupabaseDocumentStorage implements DocumentStorage {
   ): Promise<VersionCommitStatus> {
     const { data, error } = await this.client.rpc('resolve_document_version_commit', {
       p_document_id: input.documentId,
+      p_operation_id: input.operationId,
       p_version: input.version,
       p_storage_path: input.storagePath,
     })
@@ -131,10 +133,12 @@ export class SupabaseDocumentStorage implements DocumentStorage {
     const { error } = await this.client.from('document_storage_gc_queue').upsert(
       {
         document_id: input.documentId,
+        operation_id: input.operationId,
         storage_path: input.storagePath,
         reason: input.reason,
         version: input.version,
         last_error: input.lastError,
+        not_before: input.notBefore,
         resolved_at: null,
       },
       { onConflict: 'storage_path' },
@@ -154,16 +158,10 @@ export class SupabaseDocumentStorage implements DocumentStorage {
   }
 
   // RPC로 version insert와 current version 갱신을 하나의 트랜잭션으로 실행
-  async commitNewVersion(input: {
-    documentId: string
-    expectedVersion: number
-    nextVersion: number
-    storagePath: string
-    byteSize: number
-    actorId: string
-  }): Promise<CreateVersionResult> {
+  async commitNewVersion(input: VersionCommitInput): Promise<CreateVersionResult> {
     const { data, error } = await this.client.rpc('create_document_version', {
       p_document_id: input.documentId,
+      p_operation_id: input.operationId,
       p_expected_version: input.expectedVersion,
       p_next_version: input.nextVersion,
       p_storage_path: input.storagePath,

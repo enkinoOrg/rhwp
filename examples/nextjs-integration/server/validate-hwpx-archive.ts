@@ -14,11 +14,15 @@ const HWPX_MIMETYPE = 'application/hwp+zip'
 export interface InspectedZipEntry {
   path: string
   uncompressedSize: number
-  readText(maxBytes: number): Promise<string>
+  readBytes(maxBytes: number): Promise<Uint8Array>
 }
 
 export interface ZipInspector {
   inspect(bytes: Uint8Array): Promise<readonly InspectedZipEntry[]>
+}
+
+export interface SecureXmlParser {
+  parse(bytes: Uint8Array, sourceName: string): Promise<void>
 }
 
 export interface HwpxArchiveLimits {
@@ -74,6 +78,7 @@ function isXmlEntry(path: string): boolean {
 // 검증된 ZIP inspector를 HWPX 정책 validator로 조합
 export function createHwpxArchiveValidator(
   inspector: ZipInspector,
+  xmlParser: SecureXmlParser,
   limits: HwpxArchiveLimits = DEFAULT_LIMITS,
 ): HwpxArchiveValidator {
   return async bytes => {
@@ -135,16 +140,54 @@ export function createHwpxArchiveValidator(
       throw new HwpxArchiveValidationError('HWPX mimetype entry가 없습니다.')
     }
 
-    let mimetype: string
+    let mimetypeBytes: Uint8Array
 
     try {
-      mimetype = await mimetypeEntry.readText(limits.maxXmlBytes)
+      mimetypeBytes = await mimetypeEntry.readBytes(limits.maxEntryBytes)
     } catch {
       throw new HwpxArchiveValidationError('HWPX mimetype을 읽을 수 없습니다.')
     }
 
+    if (mimetypeBytes.byteLength > limits.maxEntryBytes) {
+      throw new HwpxArchiveValidationError('HWPX mimetype 크기가 허용 범위를 벗어났습니다.')
+    }
+
+    let mimetype: string
+
+    try {
+      mimetype = new TextDecoder('utf-8', { fatal: true }).decode(mimetypeBytes)
+    } catch {
+      throw new HwpxArchiveValidationError('HWPX mimetype 인코딩이 유효하지 않습니다.')
+    }
+
     if (mimetype !== HWPX_MIMETYPE) {
       throw new HwpxArchiveValidationError('HWPX mimetype이 유효하지 않습니다.')
+    }
+
+    for (const path of REQUIRED_HWPX_ENTRIES.filter(isXmlEntry)) {
+      const entry = entriesByPath.get(path)
+
+      if (!entry) {
+        throw new HwpxArchiveValidationError(`HWPX 필수 entry가 없습니다: ${path}`)
+      }
+
+      let xmlBytes: Uint8Array
+
+      try {
+        xmlBytes = await entry.readBytes(limits.maxXmlBytes)
+      } catch {
+        throw new HwpxArchiveValidationError(`HWPX XML을 읽을 수 없습니다: ${path}`)
+      }
+
+      if (xmlBytes.byteLength > limits.maxXmlBytes) {
+        throw new HwpxArchiveValidationError(`HWPX XML 크기가 허용 범위를 벗어났습니다: ${path}`)
+      }
+
+      try {
+        await xmlParser.parse(xmlBytes, path)
+      } catch {
+        throw new HwpxArchiveValidationError(`HWPX XML이 유효하지 않습니다: ${path}`)
+      }
     }
   }
 }

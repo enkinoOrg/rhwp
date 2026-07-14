@@ -1,6 +1,6 @@
 import type {
   DocumentStorage,
-  VersionCommitReference,
+  GarbageCollectionCandidate,
 } from './document-repository'
 
 type GarbageCollectionStorage = Pick<
@@ -13,8 +13,13 @@ export type GarbageCollectionResult = 'deleted' | 'referenced' | 'retained'
 // DB 참조 재확인 후에만 Storage object를 삭제하는 GC 함수
 export async function collectDocumentStorageGarbage(
   storage: GarbageCollectionStorage,
-  reference: VersionCommitReference,
+  reference: GarbageCollectionCandidate,
+  now: () => Date = () => new Date(),
 ): Promise<GarbageCollectionResult> {
+  const notBefore = new Date(reference.notBefore).getTime()
+
+  if (!Number.isFinite(notBefore) || now().getTime() < notBefore) return 'retained'
+
   let status
 
   try {

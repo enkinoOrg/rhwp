@@ -17,6 +17,7 @@ export interface CreateVersionInput {
   expectedVersion: DocumentVersion
   bytes: Uint8Array
   actorId: string
+  operationId?: string
 }
 
 export type CreateVersionResult =
@@ -27,6 +28,7 @@ export type HwpxArchiveValidator = (bytes: Uint8Array) => Promise<void>
 
 export interface VersionCommitReference {
   documentId: string
+  operationId: string
   version: DocumentVersion
   storagePath: string
 }
@@ -39,6 +41,18 @@ export type VersionCommitStatus =
 export interface OrphanObjectRecord extends VersionCommitReference {
   reason: 'version-conflict' | 'commit-not-committed' | 'commit-unknown'
   lastError: string
+  notBefore: string
+}
+
+export interface GarbageCollectionCandidate extends VersionCommitReference {
+  notBefore: string
+}
+
+export interface VersionCommitInput extends VersionCommitReference {
+  expectedVersion: DocumentVersion
+  nextVersion: DocumentVersion
+  byteSize: number
+  actorId: string
 }
 
 export interface DocumentStorage {
@@ -53,14 +67,7 @@ export interface DocumentStorage {
   resolveVersionCommit(input: VersionCommitReference): Promise<VersionCommitStatus>
   recordOrphanObject(input: OrphanObjectRecord): Promise<void>
   markOrphanObjectResolved(storagePath: string): Promise<void>
-  commitNewVersion(input: {
-    documentId: string
-    expectedVersion: DocumentVersion
-    nextVersion: DocumentVersion
-    storagePath: string
-    byteSize: number
-    actorId: string
-  }): Promise<CreateVersionResult>
+  commitNewVersion(input: VersionCommitInput): Promise<CreateVersionResult>
 }
 
 export interface DocumentFile extends StoredObject {
@@ -68,14 +75,30 @@ export interface DocumentFile extends StoredObject {
   version: DocumentVersion
 }
 
+interface DocumentRepositoryOptions {
+  commitUnknownGraceMs?: number
+  now?: () => Date
+}
+
+const DEFAULT_COMMIT_UNKNOWN_GRACE_MS = 5 * 60 * 1000
+
 // 문서 metadata와 private Storage를 조합하는 저장소
 export class DocumentRepository {
   private readonly storage: DocumentStorage
   private readonly validateHwpxArchive: HwpxArchiveValidator
+  private readonly commitUnknownGraceMs: number
+  private readonly now: () => Date
 
-  constructor(storage: DocumentStorage, validateHwpxArchive: HwpxArchiveValidator) {
+  constructor(
+    storage: DocumentStorage,
+    validateHwpxArchive: HwpxArchiveValidator,
+    options: DocumentRepositoryOptions = {},
+  ) {
     this.storage = storage
     this.validateHwpxArchive = validateHwpxArchive
+    this.commitUnknownGraceMs =
+      options.commitUnknownGraceMs ?? DEFAULT_COMMIT_UNKNOWN_GRACE_MS
+    this.now = options.now ?? (() => new Date())
   }
 
   // 현재 HWPX 원본 조회
@@ -102,6 +125,10 @@ export class DocumentRepository {
     await this.validateHwpxArchive(input.bytes)
 
     const nextVersion = document.version + 1
+    const operationId = input.operationId ?? crypto.randomUUID()
+
+    if (!operationId.trim()) throw new Error('저장 operationId가 유효하지 않습니다.')
+
     const storagePath = this.createStoragePath(input.documentId, nextVersion)
 
     // 새 key에만 쓰므로 현재 원본을 덮어쓰지 않는다.
@@ -111,32 +138,33 @@ export class DocumentRepository {
       contentType: 'application/haansofthwpx',
     })
 
+    const commitInput: VersionCommitInput = {
+      documentId: input.documentId,
+      operationId,
+      expectedVersion: input.expectedVersion,
+      nextVersion,
+      version: nextVersion,
+      storagePath,
+      byteSize: input.bytes.byteLength,
+      actorId: input.actorId,
+    }
     let result: CreateVersionResult
 
     try {
-      result = await this.storage.commitNewVersion({
-        documentId: input.documentId,
-        expectedVersion: input.expectedVersion,
-        nextVersion,
-        storagePath,
-        byteSize: input.bytes.byteLength,
-        actorId: input.actorId,
-      })
+      result = await this.storage.commitNewVersion(commitInput)
     } catch (commitError) {
-      return this.resolveUnknownCommit(
-        {
-          documentId: input.documentId,
-          version: nextVersion,
-          storagePath,
-        },
-        commitError,
-      )
+      try {
+        result = await this.storage.commitNewVersion(commitInput)
+      } catch (retryError) {
+        await this.recordOrphanObject(commitInput, 'commit-unknown', retryError)
+        throw commitError
+      }
     }
 
     if (result.kind === 'conflict') {
       // 경쟁 저장에서 남은 미참조 object만 정리한다.
       await this.cleanupOrphanObject(
-        { documentId: input.documentId, version: nextVersion, storagePath },
+        commitInput,
         'version-conflict',
       )
     }
@@ -161,38 +189,6 @@ export class DocumentRepository {
     }
   }
 
-  // 응답 유실 가능성이 있는 commit 결과 복구
-  private async resolveUnknownCommit(
-    reference: VersionCommitReference,
-    commitError: unknown,
-  ): Promise<CreateVersionResult> {
-    let status: VersionCommitStatus
-
-    try {
-      status = await this.storage.resolveVersionCommit(reference)
-    } catch (probeError) {
-      await this.recordOrphanObject(reference, 'commit-unknown', probeError)
-      throw commitError
-    }
-
-    if (status.kind === 'committed') {
-      if (status.version === reference.version) {
-        return { kind: 'saved', version: status.version }
-      }
-
-      await this.recordOrphanObject(reference, 'commit-unknown', commitError)
-      throw commitError
-    }
-
-    if (status.kind === 'not-committed') {
-      await this.cleanupOrphanObject(reference, 'commit-not-committed')
-      throw commitError
-    }
-
-    await this.recordOrphanObject(reference, 'commit-unknown', commitError)
-    throw commitError
-  }
-
   // 후속 GC를 위한 durable queue 기록
   private async recordOrphanObject(
     reference: VersionCommitReference,
@@ -201,9 +197,15 @@ export class DocumentRepository {
   ): Promise<void> {
     try {
       await this.storage.recordOrphanObject({
-        ...reference,
+        documentId: reference.documentId,
+        operationId: reference.operationId,
+        version: reference.version,
+        storagePath: reference.storagePath,
         reason,
         lastError: String(error),
+        notBefore: new Date(
+          this.now().getTime() + this.commitUnknownGraceMs,
+        ).toISOString(),
       })
     } catch (recordError) {
       console.error('고아 HWPX object durable GC 기록 실패', {
