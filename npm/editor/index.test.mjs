@@ -4,7 +4,7 @@ import test from 'node:test';
 
 import { createEditor } from './index.js';
 
-function createBrowserHarness(onRequest) {
+function createBrowserHarness(onRequest, options = {}) {
   const messageListeners = new Set();
   const requests = [];
   const timers = new Set();
@@ -57,6 +57,9 @@ function createBrowserHarness(onRequest) {
     },
   };
   globalThis.setTimeout = (callback, delay, ...args) => {
+    if (delay === options.throwOnTimeoutDelay) {
+      throw options.timeoutError;
+    }
     const timer = { callback, delay, args };
     timers.add(timer);
     return timer;
@@ -220,6 +223,44 @@ test('destroy는 listener와 pending 요청을 정리하고 중복 호출과 재
   const requestCount = harness.requests.length;
   await assert.rejects(editor.pageCount(), /Editor destroyed/);
   assert.equal(harness.requests.length, requestCount);
+});
+
+test('createEditor는 ready 실패 시 원 오류를 보존하고 생성한 자원을 모두 정리한다', async (t) => {
+  const studioOrigin = 'https://studio.example.test';
+  const waitReadyError = new Error('ready retry scheduling failed');
+  const harness = createBrowserHarness(
+    () => {
+      throw new Error('Studio transport failed');
+    },
+    {
+      throwOnTimeoutDelay: 500,
+      timeoutError: waitReadyError,
+    },
+  );
+  t.after(() => harness.restore());
+
+  let actualError;
+  try {
+    await createEditor(harness.container, {
+      studioUrl: `${studioOrigin}/editor`,
+    });
+  } catch (error) {
+    actualError = error;
+  }
+
+  assert.equal(actualError, waitReadyError);
+  assert.deepEqual(
+    {
+      activeTimers: harness.activeTimerCount(),
+      iframeRemovals: harness.iframeRemoveCount(),
+      messageListeners: harness.messageListenerCount(),
+    },
+    {
+      activeTimers: 0,
+      iframeRemovals: 1,
+      messageListeners: 0,
+    },
+  );
 });
 
 test('SDK 보안 버전과 root 및 npm publish 검증 진입점이 연결된다', () => {

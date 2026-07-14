@@ -55,8 +55,13 @@ export async function createEditor(container, options = {}) {
 
   // WASM 초기화 대기 (ready 메서드로 확인)
   const editor = new RhwpEditor(iframe, studioOrigin);
-  await editor._waitReady();
-  return editor;
+  try {
+    await editor._waitReady();
+    return editor;
+  } catch (error) {
+    editor.destroy();
+    throw error;
+  }
 }
 
 /**
