@@ -9,19 +9,21 @@ import {
 import { DocumentRepository } from '../../../../../server/document-repository'
 import { SupabaseDocumentStorage } from '../../../../../server/supabase-document-storage'
 import {
+  createHwpxArchiveValidator,
+  HwpxArchiveValidationError,
+} from '../../../../../server/validate-hwpx-archive'
+import {
   assertCanEditDocument,
   assertCanReadDocument,
   requireSession,
 } from '@/server/auth/document-access'
-import { validateHwpxArchive } from '@/server/security/hwpx-archive-validator'
+import { zipInspector } from '@/server/security/zip-inspector'
 
 const HWPX_CONTENT_TYPE = 'application/haansofthwpx'
 export const MAX_HWPX_BYTES = 50 * 1024 * 1024
 
-const repository = new DocumentRepository(
-  new SupabaseDocumentStorage(),
-  validateHwpxArchive,
-)
+const validateHwpxArchive = createHwpxArchiveValidator(zipInspector)
+const repository = new DocumentRepository(new SupabaseDocumentStorage(), validateHwpxArchive)
 
 interface RouteContext {
   params: Promise<{ documentId: string }>
@@ -80,7 +82,7 @@ export async function GET(_request: NextRequest, context: RouteContext): Promise
     return Response.json({ error: '문서를 찾을 수 없습니다.' }, { status: 404 })
   }
 
-  return new Response(document.bytes, {
+  return new Response(document.bytes.slice().buffer, {
     headers: createDocumentDownloadHeaders({
       fileName: document.fileName,
       version: document.version,
@@ -119,7 +121,8 @@ export async function PUT(request: NextRequest, context: RouteContext): Promise<
   } catch (error) {
     if (
       error instanceof RequestValidationError ||
-      error instanceof DocumentBodyValidationError
+      error instanceof DocumentBodyValidationError ||
+      error instanceof HwpxArchiveValidationError
     ) {
       return Response.json({ error: error.message }, { status: error.status })
     }

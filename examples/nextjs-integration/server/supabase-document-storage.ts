@@ -5,9 +5,11 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import type {
   CreateVersionResult,
   DocumentStorage,
-  type OrphanObjectRecord,
+  OrphanObjectRecord,
   StoredDocument,
   StoredObject,
+  VersionCommitReference,
+  VersionCommitStatus,
 } from './document-repository'
 
 const DEFAULT_DOCUMENT_BUCKET = 'documents'
@@ -20,6 +22,11 @@ interface VersionCommitRow {
   kind: 'saved' | 'conflict'
   version?: number
   current_version?: number
+}
+
+interface VersionCommitStatusRow {
+  kind: 'committed' | 'not-committed' | 'unknown'
+  version?: number
 }
 
 // 서버 전용 Supabase private Storage와 문서 metadata adapter
@@ -97,6 +104,28 @@ export class SupabaseDocumentStorage implements DocumentStorage {
     if (error) throw error
   }
 
+  // document row lock 뒤 version과 Storage 경로의 commit 상태 재조회
+  async resolveVersionCommit(
+    input: VersionCommitReference,
+  ): Promise<VersionCommitStatus> {
+    const { data, error } = await this.client.rpc('resolve_document_version_commit', {
+      p_document_id: input.documentId,
+      p_version: input.version,
+      p_storage_path: input.storagePath,
+    })
+
+    if (error) throw error
+
+    const row = (data as VersionCommitStatusRow[])[0]
+
+    if (!row || row.kind === 'unknown') return { kind: 'unknown' }
+    if (row.kind === 'not-committed') return { kind: 'not-committed' }
+
+    if (typeof row.version !== 'number') return { kind: 'unknown' }
+
+    return { kind: 'committed', version: row.version }
+  }
+
   // 삭제 실패 object를 durable GC queue에 기록
   async recordOrphanObject(input: OrphanObjectRecord): Promise<void> {
     const { error } = await this.client.from('document_storage_gc_queue').upsert(
@@ -104,10 +133,22 @@ export class SupabaseDocumentStorage implements DocumentStorage {
         document_id: input.documentId,
         storage_path: input.storagePath,
         reason: input.reason,
-        last_error: input.cleanupError,
+        version: input.version,
+        last_error: input.lastError,
+        resolved_at: null,
       },
       { onConflict: 'storage_path' },
     )
+
+    if (error) throw error
+  }
+
+  // 처리 완료된 GC queue 행 표시
+  async markOrphanObjectResolved(storagePath: string): Promise<void> {
+    const { error } = await this.client
+      .from('document_storage_gc_queue')
+      .update({ resolved_at: new Date().toISOString() })
+      .eq('storage_path', storagePath)
 
     if (error) throw error
   }

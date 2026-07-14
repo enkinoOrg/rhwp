@@ -25,11 +25,20 @@ export type CreateVersionResult =
 
 export type HwpxArchiveValidator = (bytes: Uint8Array) => Promise<void>
 
-export interface OrphanObjectRecord {
+export interface VersionCommitReference {
   documentId: string
+  version: DocumentVersion
   storagePath: string
-  reason: 'version-conflict' | 'commit-failed'
-  cleanupError: string
+}
+
+export type VersionCommitStatus =
+  | { kind: 'committed'; version: DocumentVersion }
+  | { kind: 'not-committed' }
+  | { kind: 'unknown' }
+
+export interface OrphanObjectRecord extends VersionCommitReference {
+  reason: 'version-conflict' | 'commit-not-committed' | 'commit-unknown'
+  lastError: string
 }
 
 export interface DocumentStorage {
@@ -41,7 +50,9 @@ export interface DocumentStorage {
     contentType: string
   }): Promise<void>
   deleteObject(storagePath: string): Promise<void>
+  resolveVersionCommit(input: VersionCommitReference): Promise<VersionCommitStatus>
   recordOrphanObject(input: OrphanObjectRecord): Promise<void>
+  markOrphanObjectResolved(storagePath: string): Promise<void>
   commitNewVersion(input: {
     documentId: string
     expectedVersion: DocumentVersion
@@ -111,14 +122,23 @@ export class DocumentRepository {
         byteSize: input.bytes.byteLength,
         actorId: input.actorId,
       })
-    } catch (error) {
-      await this.cleanupOrphanObject(input.documentId, storagePath, 'commit-failed')
-      throw error
+    } catch (commitError) {
+      return this.resolveUnknownCommit(
+        {
+          documentId: input.documentId,
+          version: nextVersion,
+          storagePath,
+        },
+        commitError,
+      )
     }
 
     if (result.kind === 'conflict') {
       // 경쟁 저장에서 남은 미참조 object만 정리한다.
-      await this.cleanupOrphanObject(input.documentId, storagePath, 'version-conflict')
+      await this.cleanupOrphanObject(
+        { documentId: input.documentId, version: nextVersion, storagePath },
+        'version-conflict',
+      )
     }
 
     return result
@@ -131,27 +151,66 @@ export class DocumentRepository {
 
   // 실패해도 version 충돌 응답을 유지하는 고아 object 정리
   private async cleanupOrphanObject(
-    documentId: string,
-    storagePath: string,
+    reference: VersionCommitReference,
     reason: OrphanObjectRecord['reason'],
   ): Promise<void> {
     try {
-      await this.storage.deleteObject(storagePath)
+      await this.storage.deleteObject(reference.storagePath)
     } catch (cleanupError) {
-      try {
-        await this.storage.recordOrphanObject({
-          documentId,
-          storagePath,
-          reason,
-          cleanupError: String(cleanupError),
-        })
-      } catch (recordError) {
-        console.error('고아 HWPX object durable GC 기록 실패', {
-          storagePath,
-          cleanupError,
-          recordError,
-        })
+      await this.recordOrphanObject(reference, reason, cleanupError)
+    }
+  }
+
+  // 응답 유실 가능성이 있는 commit 결과 복구
+  private async resolveUnknownCommit(
+    reference: VersionCommitReference,
+    commitError: unknown,
+  ): Promise<CreateVersionResult> {
+    let status: VersionCommitStatus
+
+    try {
+      status = await this.storage.resolveVersionCommit(reference)
+    } catch (probeError) {
+      await this.recordOrphanObject(reference, 'commit-unknown', probeError)
+      throw commitError
+    }
+
+    if (status.kind === 'committed') {
+      if (status.version === reference.version) {
+        return { kind: 'saved', version: status.version }
       }
+
+      await this.recordOrphanObject(reference, 'commit-unknown', commitError)
+      throw commitError
+    }
+
+    if (status.kind === 'not-committed') {
+      await this.cleanupOrphanObject(reference, 'commit-not-committed')
+      throw commitError
+    }
+
+    await this.recordOrphanObject(reference, 'commit-unknown', commitError)
+    throw commitError
+  }
+
+  // 후속 GC를 위한 durable queue 기록
+  private async recordOrphanObject(
+    reference: VersionCommitReference,
+    reason: OrphanObjectRecord['reason'],
+    error: unknown,
+  ): Promise<void> {
+    try {
+      await this.storage.recordOrphanObject({
+        ...reference,
+        reason,
+        lastError: String(error),
+      })
+    } catch (recordError) {
+      console.error('고아 HWPX object durable GC 기록 실패', {
+        storagePath: reference.storagePath,
+        error,
+        recordError,
+      })
     }
   }
 }

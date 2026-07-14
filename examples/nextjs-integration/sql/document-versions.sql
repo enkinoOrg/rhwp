@@ -25,13 +25,25 @@ create table if not exists public.document_versions (
 create table if not exists public.document_storage_gc_queue (
   id bigint generated always as identity primary key,
   document_id uuid not null references public.documents(id),
+  version integer not null check (version > 0),
   storage_path text not null unique,
-  reason text not null check (reason in ('version-conflict', 'commit-failed')),
+  reason text not null,
   last_error text not null,
   attempt_count integer not null default 0 check (attempt_count >= 0),
   created_at timestamptz not null default now(),
   resolved_at timestamptz
 );
+
+-- 이전 예제 스키마를 적용한 DB에도 commit 재조회용 version을 추가한다.
+alter table public.document_storage_gc_queue
+add column if not exists version integer;
+
+alter table public.document_storage_gc_queue
+drop constraint if exists document_storage_gc_queue_reason_check;
+
+alter table public.document_storage_gc_queue
+add constraint document_storage_gc_queue_reason_check
+check (reason in ('version-conflict', 'commit-not-committed', 'commit-unknown'));
 
 -- Data API가 route 권한 경계를 우회하지 못하도록 업무 테이블을 서버 전용으로 잠근다.
 alter table public.documents enable row level security;
@@ -136,3 +148,60 @@ owner to postgres;
 revoke all on function public.create_document_version(uuid, integer, integer, text, integer, uuid) from public;
 revoke all on function public.create_document_version(uuid, integer, integer, text, integer, uuid) from anon, authenticated;
 grant execute on function public.create_document_version(uuid, integer, integer, text, integer, uuid) to service_role;
+
+-- commit 응답 유실 시 document row lock으로 선행 RPC 종료를 기다린 뒤 참조 상태를 판정한다.
+create or replace function public.resolve_document_version_commit(
+  p_document_id uuid,
+  p_version integer,
+  p_storage_path text
+)
+returns table (kind text, version integer)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  locked_version integer;
+  locked_storage_path text;
+begin
+  select current_version, current_storage_path
+  into locked_version, locked_storage_path
+  from public.documents
+  where id = p_document_id
+  for update;
+
+  if not found then
+    return query select 'unknown', null::integer;
+    return;
+  end if;
+
+  if exists (
+    select 1
+    from public.document_versions as dv
+    where dv.document_id = p_document_id
+      and dv.version = p_version
+      and dv.storage_path = p_storage_path
+  ) then
+    return query select 'committed', p_version;
+    return;
+  end if;
+
+  if locked_storage_path = p_storage_path or exists (
+    select 1
+    from public.document_versions as dv
+    where dv.storage_path = p_storage_path
+  ) then
+    return query select 'unknown', null::integer;
+    return;
+  end if;
+
+  return query select 'not-committed', null::integer;
+end;
+$$;
+
+alter function public.resolve_document_version_commit(uuid, integer, text)
+owner to postgres;
+
+revoke all on function public.resolve_document_version_commit(uuid, integer, text) from public;
+revoke all on function public.resolve_document_version_commit(uuid, integer, text) from anon, authenticated;
+grant execute on function public.resolve_document_version_commit(uuid, integer, text) to service_role;

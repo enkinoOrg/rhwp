@@ -5,10 +5,10 @@
 ## 설치
 
 ```bash
-npm install @rhwp/editor
+npm install @rhwp/editor@^0.7.19
 ```
 
-`rhwp-client.ts`를 프로젝트에 복사하거나 해당 파일을 기준으로 연동 코드를 작성합니다.
+보안 검증이 반영된 SDK 최소 버전은 `0.7.19`입니다. `rhwp-client.ts`를 프로젝트에 복사하거나 해당 파일을 기준으로 연동 코드를 작성합니다.
 
 ## 컨테이너
 
