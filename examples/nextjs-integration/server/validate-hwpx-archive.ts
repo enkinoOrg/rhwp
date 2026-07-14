@@ -10,6 +10,7 @@ const REQUIRED_HWPX_ENTRIES = [
 ] as const
 
 const HWPX_MIMETYPE = 'application/hwp+zip'
+const XML_ENTRY_EXTENSIONS = ['.xml', '.hpf', '.rdf', '.rels', '.opf'] as const
 
 export interface InspectedZipEntry {
   path: string
@@ -72,7 +73,9 @@ function normalizeEntryPath(path: string): string {
 
 // XML 계열 entry 여부 확인
 function isXmlEntry(path: string): boolean {
-  return path.endsWith('.xml') || path.endsWith('.hpf')
+  const lowerPath = path.toLowerCase()
+
+  return XML_ENTRY_EXTENSIONS.some(extension => lowerPath.endsWith(extension))
 }
 
 // 검증된 ZIP inspector를 HWPX 정책 validator로 조합
@@ -164,12 +167,8 @@ export function createHwpxArchiveValidator(
       throw new HwpxArchiveValidationError('HWPX mimetype이 유효하지 않습니다.')
     }
 
-    for (const path of REQUIRED_HWPX_ENTRIES.filter(isXmlEntry)) {
-      const entry = entriesByPath.get(path)
-
-      if (!entry) {
-        throw new HwpxArchiveValidationError(`HWPX 필수 entry가 없습니다: ${path}`)
-      }
+    for (const [path, entry] of entriesByPath) {
+      if (path === 'mimetype' || !isXmlEntry(path)) continue
 
       let xmlBytes: Uint8Array
 

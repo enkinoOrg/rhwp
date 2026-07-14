@@ -124,7 +124,7 @@ Supabase RPC `resolve_document_version_commit`은 선행 commit RPC와 같은 do
 
 PUT은 `Content-Length`가 있으면 50MB를 본문 읽기 전에 선검사한다. 헤더가 없거나 작게 위조되어도 `readBodyWithinLimit(body, MAX_HWPX_BYTES)`가 stream chunk를 누적하고 한도를 넘으면 cancel한 뒤 413으로 끝낸다. 실제 구현은 [documents.ts](../../examples/nextjs-integration/lib/api/documents.ts)와 [Route Handler](../../examples/nextjs-integration/app/api/documents/%5BdocumentId%5D/file/route.ts)를 따른다.
 
-[validate-hwpx-archive.ts](../../examples/nextjs-integration/server/validate-hwpx-archive.ts)는 Storage 저장 전에 entry count, 안전한 경로, 중복 entry, 필수 HWPX entry, `application/hwp+zip` mimetype, entry별/전체 uncompressed 크기와 XML 크기를 fail-closed로 제한한다. inspector는 metadata만 신뢰하지 않고 실제 압축 해제를 제한하며 `readBytes(maxBytes)`를 제공한다. 필수 XML/HPF는 [fast-xml-parser-adapter.ts](../../examples/nextjs-integration/server/fast-xml-parser-adapter.ts)로 끝까지 validation/parse하고, `DOCTYPE`, `ENTITY`, malformed XML과 byte 한도 초과를 거부한다. `mimetype`은 XML parser 대상이 아니다.
+[validate-hwpx-archive.ts](../../examples/nextjs-integration/server/validate-hwpx-archive.ts)는 Storage 저장 전에 entry count, 안전한 경로, 중복 entry, 필수 HWPX entry, `application/hwp+zip` mimetype, entry별/전체 uncompressed 크기와 XML 크기를 fail-closed로 제한한다. inspector는 metadata만 신뢰하지 않고 실제 압축 해제를 제한하며 `readBytes(maxBytes)`를 제공한다. 필수 목록에 한정하지 않고 archive의 모든 XML 계열 entry(`.xml`, `.hpf`, `.rdf`, `.rels`, `.opf`)를 [fast-xml-parser-adapter.ts](../../examples/nextjs-integration/server/fast-xml-parser-adapter.ts)로 끝까지 validation/parse한다. 각 entry에 XML byte 한도를 적용하고 `DOCTYPE`, `ENTITY`, malformed XML을 거부하며, `mimetype`은 XML parser 대상이 아니다.
 
 ## 환경 변수와 배포
 

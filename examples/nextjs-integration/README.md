@@ -65,12 +65,12 @@ sql/document-versions.sql
 - entry 수 상한 기본 256개
 - 절대 경로, `..`, 역슬래시, NUL, 중복 정규화 경로를 거부하고 경로를 archive 밖으로 확장하지 않기
 - entry별 uncompressed 크기 상한 기본 20MB, 전체 uncompressed 크기 상한 기본 100MB
-- XML 및 HPF entry별 크기 상한 기본 10MB
-- `version.xml`, `Contents/content.hpf`, `Contents/header.xml`, `Contents/section0.xml`, `META-INF/manifest.xml`을 제한된 bytes로 끝까지 validation 및 parse
+- 모든 XML 계열 entry의 크기 상한 기본 10MB
+- archive의 모든 XML 계열 entry(`.xml`, `.hpf`, `.rdf`, `.rels`, `.opf`)를 제한된 bytes로 끝까지 validation 및 parse
 - XML의 `DOCTYPE`과 `ENTITY` 선언, malformed XML, 유효하지 않은 UTF-8 거부
 - 암호화 entry, 지원하지 않는 압축 방식, 중앙 directory와 실제 stream metadata 불일치 거부
 
-수치는 서비스 정책에 맞게 더 낮출 수 있지만 상한을 제거하면 안 됩니다. `ZipInspector` adapter는 metadata를 그대로 전달하지 말고 제한된 stream으로 실제 압축 해제 byte 수를 검증해 `uncompressedSize`와 `readBytes(maxBytes)`를 제공해야 합니다. `mimetype`은 XML parser에 넘기지 않고 media type 문자열로만 검사합니다. ZIP은 기존 proven library를 adapter로 감싸고, XML은 `fast-xml-parser@^5.10.0`의 `XMLValidator`와 `XMLParser({ processEntities: false })`를 사용하는 복사 가능한 adapter를 적용합니다.
+수치는 서비스 정책에 맞게 더 낮출 수 있지만 상한을 제거하면 안 됩니다. `ZipInspector` adapter는 metadata를 그대로 전달하지 말고 제한된 stream으로 실제 압축 해제 byte 수를 검증해 `uncompressedSize`와 `readBytes(maxBytes)`를 제공해야 합니다. 필수 목록 밖의 추가 section과 metadata도 확장자가 XML 계열이면 같은 검증을 받으며, `mimetype`은 XML parser에 넘기지 않고 media type 문자열로만 검사합니다. ZIP은 기존 proven library를 adapter로 감싸고, XML은 `fast-xml-parser@^5.10.0`의 `XMLValidator`와 `XMLParser({ processEntities: false })`를 사용하는 복사 가능한 adapter를 적용합니다.
 
 ## 편집 변경과 저장 모델
 

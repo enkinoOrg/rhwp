@@ -549,19 +549,26 @@ test('fail-closed HWPX validator는 archive 구조와 크기 제한을 모두 �
     const encoder = new TextEncoder()
     const entry = (path, size = 4, text = '<x/>') => ({
       path, uncompressedSize: size, async readBytes(maxBytes) {
-        const bytes = encoder.encode(path === 'mimetype' ? text : '<x/>')
+        const bytes = encoder.encode(text)
         if (bytes.byteLength > maxBytes) throw new Error('entry byte limit')
         return bytes
       },
     })
-    const valid = required.map(path => entry(
-      path, 4, path === 'mimetype' ? 'application/hwp+zip' : '<x/>',
-    ))
+    const valid = [
+      ...required.map(path => entry(
+        path, 4, path === 'mimetype' ? 'application/hwp+zip' : '<x/>',
+      )),
+      entry('Contents/section1.xml'),
+      entry('META-INF/container.rdf'),
+      entry('_rels/document.rels'),
+      entry('Contents/package.opf'),
+      entry('Preview/PrvText.txt'),
+    ]
     const parsed = []
     const validateValid = createHwpxArchiveValidator(
       { async inspect() { return valid } },
       { async parse(_bytes, path) { parsed.push(path) } },
-      { maxEntries: 10, maxEntryBytes: 20, maxTotalUncompressedBytes: 60, maxXmlBytes: 10 },
+      { maxEntries: 20, maxEntryBytes: 20, maxTotalUncompressedBytes: 100, maxXmlBytes: 10 },
     )
     await validateValid(new Uint8Array([1]))
     async function rejects(entries, limits = {}) {
@@ -569,7 +576,7 @@ test('fail-closed HWPX validator는 archive 구조와 크기 제한을 모두 �
         { async inspect() { return entries } },
         { async parse() {} },
         {
-          maxEntries: 10, maxEntryBytes: 20, maxTotalUncompressedBytes: 60,
+          maxEntries: 20, maxEntryBytes: 20, maxTotalUncompressedBytes: 100,
           maxXmlBytes: 10, ...limits,
         },
       )
@@ -596,6 +603,10 @@ test('fail-closed HWPX validator는 archive 구조와 크기 제한을 모두 �
       'Contents/header.xml',
       'Contents/section0.xml',
       'META-INF/manifest.xml',
+      'Contents/section1.xml',
+      'META-INF/container.rdf',
+      '_rels/document.rels',
+      'Contents/package.opf',
     ],
     traversal: true,
     duplicate: true,
@@ -605,6 +616,62 @@ test('fail-closed HWPX validator는 archive 구조와 크기 제한을 모두 �
     totalLimit: true,
     xmlLimit: true,
     countLimit: true,
+  })
+})
+
+test('추가 section XML의 malformed와 선언 공격은 archive validator에서 거부된다', () => {
+  const validatorUrl = moduleUrl('examples/nextjs-integration/server/validate-hwpx-archive.ts')
+  const parserUrl = moduleUrl('examples/nextjs-integration/server/secure-xml-parser.ts')
+  const output = runTypeScriptModule(`
+    const { createHwpxArchiveValidator } = await import(${JSON.stringify(validatorUrl)})
+    const { createSecureXmlParser } = await import(${JSON.stringify(parserUrl)})
+    const encoder = new TextEncoder()
+    const required = [
+      'mimetype', 'version.xml', 'Contents/content.hpf', 'Contents/header.xml',
+      'Contents/section0.xml', 'META-INF/manifest.xml',
+    ]
+    const secureParser = createSecureXmlParser({
+      validate(xml) {
+        return xml === '<broken>' ? { err: { msg: 'invalid' } } : true
+      },
+      parse() { return {} },
+    })
+    function entries(section1) {
+      return [...required, 'Contents/section1.xml'].map(path => {
+        const text = path === 'mimetype'
+          ? 'application/hwp+zip'
+          : path === 'Contents/section1.xml' ? section1 : '<x/>'
+        const bytes = encoder.encode(text)
+        return {
+          path, uncompressedSize: bytes.byteLength,
+          async readBytes(maxBytes) {
+            if (bytes.byteLength > maxBytes) throw new Error('entry byte limit')
+            return bytes
+          },
+        }
+      })
+    }
+    async function rejects(section1) {
+      const validate = createHwpxArchiveValidator(
+        { async inspect() { return entries(section1) } },
+        secureParser,
+        { maxEntries: 20, maxEntryBytes: 100, maxTotalUncompressedBytes: 500, maxXmlBytes: 100 },
+      )
+      try { await validate(new Uint8Array([1])); return false } catch { return true }
+    }
+    console.log(JSON.stringify({
+      valid: await rejects('<section/>'),
+      malformed: await rejects('<broken>'),
+      doctype: await rejects('<!DOCTYPE section><section/>'),
+      entity: await rejects('<!ENTITY x "boom"><section/>'),
+    }))
+  `)
+
+  assert.deepEqual(JSON.parse(output), {
+    valid: false,
+    malformed: true,
+    doctype: true,
+    entity: true,
   })
 })
 
@@ -875,6 +942,8 @@ test('연동 문서는 SDK 최소 버전과 commit-unknown 및 validator 실제 
     assert.match(document, /readBytes\(maxBytes\)/)
     assert.match(document, /DOCTYPE/)
     assert.match(document, /ENTITY/)
+    assert.match(document, /모든 XML 계열 entry/)
+    assert.match(document, /\.xml.*\.hpf.*\.rdf.*\.rels.*\.opf/)
   }
 
   for (const document of documents.slice(2, 4)) {
