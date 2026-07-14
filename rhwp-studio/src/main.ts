@@ -1055,8 +1055,8 @@ async function handleRhwpMessage(e: MessageEvent): Promise<void> {
   // rhwp-request: 범용 API
   if (msg.type !== 'rhwp-request' || !msg.method) return;
   const { id, method, params } = msg;
-  const reply = (result?: any, error?: string) => {
-    e.source?.postMessage({ type: 'rhwp-response', id, result, error }, { targetOrigin: e.origin });
+  const reply = (result?: any, error?: string, transfer: Transferable[] = []) => {
+    e.source?.postMessage({ type: 'rhwp-response', id, result, error }, { targetOrigin: e.origin, transfer });
   };
 
   try {
@@ -1087,11 +1087,17 @@ async function handleRhwpMessage(e: MessageEvent): Promise<void> {
         break;
       case 'exportHwp':
         await initPromise;
-        reply(Array.from(wasm.exportHwp()));
+        {
+          const buffer = wasm.exportHwp().slice().buffer;
+          reply(buffer, undefined, [buffer]);
+        }
         break;
       case 'exportHwpx':
         await initPromise;
-        reply(Array.from(wasm.exportHwpx()));
+        {
+          const buffer = wasm.exportHwpx().slice().buffer;
+          reply(buffer, undefined, [buffer]);
+        }
         break;
       case 'exportHwpVerify':
         await initPromise;

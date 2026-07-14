@@ -78,7 +78,7 @@ const editor = await createEditor(document.getElementById('editor'));
 
 ### editor.loadFile(data, fileName?)
 
-HWP 파일을 로드합니다.
+HWP 파일을 로드합니다. `ArrayBuffer`와 `Uint8Array`를 받으며, SDK는 전달받은 범위만 별도 버퍼로 복사한 뒤 Studio로 transfer합니다. 따라서 호출자가 넘긴 버퍼의 소유권과 내용은 유지됩니다.
 
 ```javascript
 const result = await editor.loadFile(buffer, 'sample.hwp');
@@ -103,7 +103,7 @@ const svg = await editor.getPageSvg(0); // 첫 페이지
 
 ### editor.exportHwp()
 
-현재 편집 중인 문서를 HWP 바이너리로 내보냅니다.
+현재 편집 중인 문서를 HWP 바이너리로 내보냅니다. 반환된 `Uint8Array`는 호출자가 소유합니다.
 
 ```javascript
 const bytes = await editor.exportHwp();
@@ -119,7 +119,7 @@ URL.revokeObjectURL(url);
 
 ### editor.exportHwpx()
 
-현재 편집 중인 문서를 HWPX(ZIP+XML) 바이너리로 내보냅니다.
+현재 편집 중인 문서를 HWPX(ZIP+XML) 바이너리로 내보냅니다. 반환된 `Uint8Array`는 호출자가 소유합니다.
 
 ```javascript
 const bytes = await editor.exportHwpx();
@@ -132,6 +132,8 @@ a.download = 'document.hwpx';
 a.click();
 URL.revokeObjectURL(url);
 ```
+
+SDK와 Studio 사이의 대용량 바이너리는 transferable `ArrayBuffer`로 전송합니다. 순차 배포를 위해 Studio는 기존 `number[]`/`Uint8Array` 입력도 계속 받고, SDK는 기존 Studio의 `number[]` 응답도 계속 변환합니다.
 
 ### editor.exportHwpVerify()
 

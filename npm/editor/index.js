@@ -13,6 +13,20 @@ const DEFAULT_STUDIO_URL = 'https://edwardkim.github.io/rhwp/';
 
 let requestId = 0;
 
+function copyToTransferableBuffer(data) {
+  const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+  return bytes.slice().buffer;
+}
+
+function toUint8Array(result) {
+  if (result instanceof Uint8Array) return result;
+  if (result instanceof ArrayBuffer) return new Uint8Array(result);
+  if (ArrayBuffer.isView(result)) {
+    return new Uint8Array(result.buffer, result.byteOffset, result.byteLength);
+  }
+  return new Uint8Array(result || []);
+}
+
 /**
  * HWP 에디터를 생성하여 지정된 컨테이너에 마운트합니다.
  *
@@ -99,7 +113,7 @@ class RhwpEditor {
    * iframe에 요청을 보내고 응답을 기다립니다.
    * @internal
    */
-  _request(method, params = {}) {
+  _request(method, params = {}, transfer = []) {
     if (this._destroyed) {
       return Promise.reject(new Error('Editor destroyed'));
     }
@@ -116,7 +130,8 @@ class RhwpEditor {
       this._pending.set(id, { resolve, reject, timer });
       this._iframe.contentWindow.postMessage(
         { type: 'rhwp-request', id, method, params },
-        this._studioOrigin
+        this._studioOrigin,
+        transfer
       );
     });
   }
@@ -151,8 +166,8 @@ class RhwpEditor {
    * ```
    */
   async loadFile(data, fileName = 'document.hwp') {
-    const bytes = data instanceof ArrayBuffer ? Array.from(new Uint8Array(data)) : Array.from(data);
-    return this._request('loadFile', { data: bytes, fileName });
+    const buffer = copyToTransferableBuffer(data);
+    return this._request('loadFile', { data: buffer, fileName }, [buffer]);
   }
 
   /**
@@ -178,7 +193,7 @@ class RhwpEditor {
    */
   async exportHwp() {
     const result = await this._request('exportHwp');
-    return result instanceof Uint8Array ? result : new Uint8Array(result || []);
+    return toUint8Array(result);
   }
 
   /**
@@ -187,7 +202,7 @@ class RhwpEditor {
    */
   async exportHwpx() {
     const result = await this._request('exportHwpx');
-    return result instanceof Uint8Array ? result : new Uint8Array(result || []);
+    return toUint8Array(result);
   }
 
   /**

@@ -49,8 +49,14 @@ function extractMessageHandlerSource(): string {
   return `globalThis.__handler = ${handlerExpression.getText(sourceFile)};`;
 }
 
-function createStudioHarness() {
-  const replies: Array<{ message: unknown; options: { targetOrigin?: string } | string }> = [];
+function createStudioHarness(
+  wasmOverrides: Record<string, unknown> = {},
+  loadBytes: (bytes: Uint8Array) => Promise<void> = async () => {},
+) {
+  const replies: Array<{
+    message: unknown;
+    options: { targetOrigin?: string; transfer?: Transferable[] } | string;
+  }> = [];
   const parentWindow = {
     postMessage(message: unknown, options: { targetOrigin?: string } | string) {
       replies.push({ message, options });
@@ -67,13 +73,14 @@ function createStudioHarness() {
     Uint8Array,
     canReplaceCurrentDocument: async () => true,
     initPromise: Promise.resolve(),
-    loadBytes: async () => {},
+    loadBytes,
     wasm: {
       exportHwp: () => new Uint8Array(),
       exportHwpVerify: () => '{}',
       exportHwpx: () => new Uint8Array(),
       pageCount: 1,
       renderPageSvg: () => '<svg></svg>',
+      ...wasmOverrides,
     },
     window: { parent: parentWindow },
   } as Record<string, unknown>;
@@ -124,4 +131,58 @@ test('Studio는 실제 parent 요청의 origin을 응답 targetOrigin으로 사�
     ),
     origins,
   );
+});
+
+test('Studio는 transferred ArrayBuffer, Uint8Array와 legacy number[] loadFile 입력을 모두 받는다', async () => {
+  const loaded: Uint8Array[] = [];
+  const { handler, parentWindow } = createStudioHarness({}, async bytes => {
+    loaded.push(bytes);
+  });
+  const inputs = [
+    new Uint8Array([11, 13]).buffer,
+    new Uint8Array([17, 19]),
+    [23, 29],
+  ];
+
+  for (const [index, data] of inputs.entries()) {
+    await handler({
+      data: { type: 'rhwp-request', id: index + 1, method: 'loadFile', params: { data } },
+      origin: 'https://host.example.test',
+      source: parentWindow,
+    });
+  }
+
+  assert.deepEqual(loaded.map(bytes => [...bytes]), [[11, 13], [17, 19], [23, 29]]);
+});
+
+test('Studio는 큰 HWP/HWPX 결과를 standalone ArrayBuffer로 복사해 transfer한다', async () => {
+  const hwp = new Uint8Array(8 * 1024 * 1024 + 2);
+  hwp[0] = 31;
+  hwp[hwp.length - 1] = 37;
+  const hwpx = new Uint8Array([41, 43]);
+  const { handler, parentWindow, replies } = createStudioHarness({
+    exportHwp: () => hwp,
+    exportHwpx: () => hwpx,
+  });
+
+  for (const [index, method] of ['exportHwp', 'exportHwpx'].entries()) {
+    await handler({
+      data: { type: 'rhwp-request', id: index + 1, method, params: {} },
+      origin: 'https://host.example.test',
+      source: parentWindow,
+    });
+  }
+
+  for (const reply of replies) {
+    const result = (reply.message as { result: unknown }).result;
+    assert.ok(result instanceof ArrayBuffer);
+    const transfer = typeof reply.options === 'string' ? [] : reply.options.transfer ?? [];
+    assert.equal(transfer.length, 1);
+    assert.equal(transfer[0], result);
+  }
+  const hwpResult = new Uint8Array((replies[0].message as { result: ArrayBuffer }).result);
+  assert.equal(hwpResult.byteLength, hwp.byteLength);
+  assert.equal(hwpResult[0], 31);
+  assert.equal(hwpResult.at(-1), 37);
+  assert.notEqual(hwpResult.buffer, hwp.buffer);
 });

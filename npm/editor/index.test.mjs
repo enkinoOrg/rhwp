@@ -14,9 +14,9 @@ function createBrowserHarness(onRequest, options = {}) {
   const originalClearTimeout = globalThis.clearTimeout;
   let iframeRemoveCount = 0;
   const contentWindow = {
-    postMessage(message, targetOrigin) {
-      requests.push({ message, targetOrigin });
-      onRequest({ message, targetOrigin, dispatchMessage, contentWindow });
+    postMessage(message, targetOrigin, transfer) {
+      requests.push({ message, targetOrigin, transfer });
+      onRequest({ message, targetOrigin, transfer, dispatchMessage, contentWindow });
     },
   };
   const iframe = {
@@ -279,4 +279,69 @@ test('SDK 보안 버전과 root 및 npm publish 검증 진입점이 연결된다
   assert.match(rootPackage.scripts.test, /npm run test:sdk/);
   assert.match(rootPackage.scripts.check, /npm run test:sdk/);
   assert.match(editorPublishJob ?? '', /name: Test SDK[\s\S]*run: npm run test:sdk/);
+});
+
+test('loadFile은 큰 Uint8Array의 선택 범위를 복사해 전송하고 호출자 버퍼를 보존한다', async (t) => {
+  const studioOrigin = 'https://studio.example.test';
+  const source = new Uint8Array(8 * 1024 * 1024 + 4);
+  source[2] = 17;
+  source[source.length - 3] = 29;
+  const selected = source.subarray(2, source.length - 2);
+  let loadRequest;
+  const harness = createBrowserHarness(({ message, transfer, dispatchMessage, contentWindow }) => {
+    if (message.method === 'loadFile') loadRequest = { message, transfer };
+    dispatchMessage({
+      data: {
+        type: 'rhwp-response',
+        id: message.id,
+        result: message.method === 'ready' ? true : { pageCount: 3 },
+      },
+      origin: studioOrigin,
+      source: contentWindow,
+    });
+  });
+  t.after(() => harness.restore());
+
+  const editor = await createEditor(harness.container, { studioUrl: `${studioOrigin}/editor` });
+  assert.deepEqual(await editor.loadFile(selected, 'large.hwpx'), { pageCount: 3 });
+
+  const transferred = loadRequest?.message.params.data;
+  assert.ok(transferred instanceof ArrayBuffer);
+  assert.equal(transferred.byteLength, selected.byteLength);
+  assert.equal(new Uint8Array(transferred)[0], 17);
+  assert.equal(new Uint8Array(transferred).at(-1), 29);
+  assert.deepEqual(loadRequest.transfer, [transferred]);
+  assert.notEqual(transferred, source.buffer);
+  assert.equal(source[2], 17);
+  assert.equal(source[source.length - 3], 29);
+});
+
+test('exportHwp와 exportHwpx는 binary 응답과 legacy number[] 응답을 모두 Uint8Array로 반환한다', async (t) => {
+  const studioOrigin = 'https://studio.example.test';
+  const binary = new Uint8Array(8 * 1024 * 1024);
+  binary[0] = 41;
+  binary[binary.length - 1] = 43;
+  const harness = createBrowserHarness(({ message, dispatchMessage, contentWindow }) => {
+    const result = message.method === 'ready'
+      ? true
+      : message.method === 'exportHwp'
+        ? binary.buffer
+        : [47, 53];
+    dispatchMessage({
+      data: { type: 'rhwp-response', id: message.id, result },
+      origin: studioOrigin,
+      source: contentWindow,
+    });
+  });
+  t.after(() => harness.restore());
+
+  const editor = await createEditor(harness.container, { studioUrl: `${studioOrigin}/editor` });
+  const hwp = await editor.exportHwp();
+  const hwpx = await editor.exportHwpx();
+
+  assert.ok(hwp instanceof Uint8Array);
+  assert.equal(hwp.byteLength, binary.byteLength);
+  assert.equal(hwp[0], 41);
+  assert.equal(hwp.at(-1), 43);
+  assert.deepEqual(hwpx, new Uint8Array([47, 53]));
 });
