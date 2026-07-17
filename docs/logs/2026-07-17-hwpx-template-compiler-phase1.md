@@ -47,7 +47,7 @@
 - 경계 이전 모든 문단의 텍스트·스타일 참조·controls 심층 표현과 패치 전후 `doc_info`/BinData 심층 표현을 비교한다.
 - 통합 테스트 결과: 6 passed, 0 ignored.
 - 관련 템플릿 컴파일러 테스트: 11 passed, 0 ignored.
-- 최종 전체 테스트: 2563 passed, 22 ignored. Task 4 ignored는 0건이며 22건은 기존 테스트다.
+- fixture 교체 직후 중간 전체 테스트: 2563 passed, 22 ignored. Task 4 ignored는 0건이며 22건은 기존 테스트다.
 - 최종 release build와 `git diff --check`: 성공.
 
 ## CLI 입력과 경계 선택 검토
@@ -56,4 +56,12 @@
 - `.hwp` 입력과 HWP 바이트를 `.hwpx`로 바꾼 입력을 모두 fail-loud로 거부한다.
 - 사용자 경계가 추천 후보 좌표와 같으면 추천 후보의 score, preview, reasons를 `selectedBoundary`로 재사용한다.
 - 추천 후보와 다르면 `user-selected boundary` 근거를 가진 별도 `selectedBoundary`를 JSON으로 출력한다.
-- 최종 검증: Task 4 통합 6 passed/0 ignored, 관련 템플릿 컴파일러 11 passed, 전체 2567 passed/22 ignored, release build와 diff check 성공. ignored 22건은 기존 테스트다.
+- CLI·보존 계약 리뷰 반영 후 검증: Task 4 통합 6 passed/0 ignored, 관련 템플릿 컴파일러 11 passed, 전체 2567 passed/22 ignored, release build와 diff check 성공. ignored 22건은 기존 테스트다.
+
+## 재로드 후 의미 보존 기준
+
+- 원본 IR과 재로드 IR을 직접 비교하면 serializer가 정규화하는 raw 예약 필드, dirty/cache 상태, 파서가 재구성하는 비의미 내부값 때문에 심층 표현이 다르다.
+- 이 비의미 정규화만 제외하기 위해 원본 문서를 먼저 동일 serializer로 export/reload한 canonical 기준선을 만든다.
+- 패치 출력 재로드 결과를 canonical 기준선과 비교해 경계 이전 모든 문단의 텍스트, 문단 모양 ID, 글자 모양 구간, controls 전체 심층 표현이 동일한지 검증한다.
+- `doc_info`와 BinData도 canonical 기준선과 전체 심층 표현을 비교한다. 패치 전후 원본 IR 비교도 별도로 유지한다.
+- canonical 재로드 assertion 추가 후 최종 검증: Task 4 6 passed/0 ignored, 관련 11 passed, 전체 2567 passed/22 ignored, release build와 diff check 성공.

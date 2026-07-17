@@ -43,7 +43,7 @@ DONE
 - GREEN: 확장자+ZIP mimetype 검증, `selectedBoundary` 근거 출력, passthrough aux 바이트 보존, `content.hpf` metadata/manifest/spine 의미 보존, 경계 앞 controls와 전역 리소스 불변을 검증한다.
 - `cargo test --test template_compiler_phase1`: 6 passed, 0 ignored.
 - 관련 템플릿 컴파일러 테스트: 11 passed, 0 ignored.
-- 전체 테스트: 2563 passed, 22 ignored. Task 4 ignored는 0건이다.
+- fixture 교체 직후 중간 전체 테스트: 2563 passed, 22 ignored. Task 4 ignored는 0건이다.
 - release build: 성공.
 - `git diff --check`: 성공.
 
@@ -58,4 +58,15 @@ DONE
 - Task 4 통합: 6 passed, 0 ignored.
 - 관련 템플릿 컴파일러: 11 passed.
 - 전체: 2567 passed, 22 ignored. ignored 22건은 기존 테스트다.
+- release build와 `git diff --check`: 성공.
+
+## 재로드 의미 projection 후속
+
+- RED: 원본 IR과 재로드 IR의 controls 전체 Debug 비교가 serializer의 raw 예약 필드와 내부 상태 정규화 때문에 실패했다.
+- GREEN: 원본을 동일 serializer로 export/reload한 canonical 기준선과 패치 출력 재로드를 비교한다.
+- 비교 대상은 경계 전 모든 문단의 텍스트·문단 모양·글자 모양 구간·controls 전체 심층 표현, `doc_info`, BinData다.
+- 제외 대상은 동일 serializer 통과 전후에만 달라지는 raw 예약 필드, dirty/cache 상태와 파서 재구성 내부값이다. 의미 필드 자체를 삭제하는 projection은 사용하지 않는다.
+- 최종 Task 4: 6 passed, 0 ignored.
+- 관련 템플릿 컴파일러: 11 passed.
+- 전체: 2567 passed, 22 ignored. 기존 기준선 ignored 22건만 존재하고 Task 4 신규 ignored는 0건이다.
 - release build와 `git diff --check`: 성공.

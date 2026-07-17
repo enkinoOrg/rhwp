@@ -98,7 +98,7 @@ Expected: PASS
 
 Run: `rtk cargo test --lib`
 
-Expected: PASS, skipped 0
+Expected: PASS. 저장소 기준선의 기존 ignored 22건은 허용하되 Task 4 신규 ignored는 0건이어야 한다.
 
 - [ ] **Step 5: 커밋**
 
@@ -237,7 +237,7 @@ Expected: PASS
 
 Run: `rtk cargo test --lib`
 
-Expected: PASS, skipped 0
+Expected: PASS. 저장소 기준선의 기존 ignored 22건은 허용하되 Task 4 신규 ignored는 0건이어야 한다.
 
 - [ ] **Step 5: 커밋**
 
@@ -308,7 +308,7 @@ Expected: PASS
 
 Run: `rtk cargo test`
 
-Expected: PASS, skipped 0
+Expected: PASS. 저장소 기준선의 기존 ignored 22건은 허용하되 Task 4 신규 ignored는 0건이어야 한다.
 
 Run: `rtk cargo build --release`
 
@@ -336,7 +336,7 @@ rtk git commit -m "HWPX 템플릿 컴파일러 1단계 검증"
 ## Final Verification
 
 - [ ] `rtk git diff --check`가 성공한다.
-- [ ] `rtk cargo test`가 skipped 0으로 성공한다.
+- [ ] `rtk cargo test`가 성공하고 기존 ignored 22건 외 Task 4 신규 ignored가 0건이다.
 - [ ] `rtk cargo build --release`가 성공한다.
 - [ ] 생성 HWPX를 `DocumentCore::from_bytes`가 다시 로드한다.
 - [ ] 선택 경계 앞 문단의 controls 심층 표현과 `doc_info`/전역 리소스 의미가 유지된다.

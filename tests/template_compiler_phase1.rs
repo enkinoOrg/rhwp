@@ -38,7 +38,7 @@ fn phase1_roles() -> [TemplateRole; 5] {
 }
 
 #[test]
-fn patches_serializes_and_reloads_real_hwpx() {
+fn reload_preserves_deep_semantics_against_canonical_roundtrip_excluding_raw_normalization() {
     let bytes = std::fs::read("samples/rowbreak-problem-pages.hwpx").unwrap();
     let mut core = rhwp::DocumentCore::from_bytes(&bytes).unwrap();
     let original_aux = zip_passthrough_aux_entries(&bytes);
@@ -58,6 +58,11 @@ fn patches_serializes_and_reloads_real_hwpx() {
         after_preview: Vec::new(),
         reasons: vec!["user-selected boundary".into()],
     };
+    let canonical_output = core.export_hwpx_native().unwrap();
+    let canonical = rhwp::DocumentCore::from_bytes(&canonical_output).unwrap();
+    let canonical_prefix = preserved_paragraphs(canonical.document(), &boundary);
+    let canonical_doc_info = format!("{:#?}", canonical.document().doc_info);
+    let canonical_resources = format!("{:#?}", canonical.document().bin_data_content);
     let profile = analyze_style_profile(core.document());
     assert_eq!(profile.roles.len(), 5);
     let preserved_prefix = preserved_paragraphs(core.document(), &boundary);
@@ -73,6 +78,18 @@ fn patches_serializes_and_reloads_real_hwpx() {
 
     let output = core.export_hwpx_native().unwrap();
     let reloaded = rhwp::DocumentCore::from_bytes(&output).unwrap();
+    assert_eq!(
+        preserved_paragraphs(reloaded.document(), &boundary),
+        canonical_prefix
+    );
+    assert_eq!(
+        format!("{:#?}", reloaded.document().doc_info),
+        canonical_doc_info
+    );
+    assert_eq!(
+        format!("{:#?}", reloaded.document().bin_data_content),
+        canonical_resources
+    );
     let output_aux = zip_passthrough_aux_entries(&output)
         .into_iter()
         .filter(|(path, _)| original_aux_paths.contains(&path.as_str()))
@@ -160,10 +177,7 @@ fn content_hpf_semantics(hwpx: &[u8]) -> ContentHpfSemantics {
                     })
                     .collect::<std::collections::BTreeMap<_, _>>();
                 if local == b"item" {
-                    let media_type = attributes
-                        .get("media-type")
-                        .cloned()
-                        .unwrap_or_default();
+                    let media_type = attributes.get("media-type").cloned().unwrap_or_default();
                     manifest_items.insert((
                         attributes.get("id").cloned().unwrap_or_default(),
                         attributes.get("href").cloned().unwrap_or_default(),
@@ -293,11 +307,7 @@ fn zip_passthrough_aux_entries(hwpx: &[u8]) -> Vec<(String, Vec<u8>)> {
     .into_iter()
     .filter_map(|path| {
         let mut bytes = Vec::new();
-        archive
-            .by_name(path)
-            .ok()?
-            .read_to_end(&mut bytes)
-            .unwrap();
+        archive.by_name(path).ok()?.read_to_end(&mut bytes).unwrap();
         Some((path.to_string(), bytes))
     })
     .collect()
