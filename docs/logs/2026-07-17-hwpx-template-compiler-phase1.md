@@ -44,7 +44,7 @@
 - 분석기 검증은 `samples/hwpx/aift.hwpx`로 분리해 다섯 역할을 모두 확인한다.
 - 안전한 명시 경계까지 확장한 최종 통합 fixture는 다섯 역할을 실제 추출하는 `samples/rowbreak-problem-pages.hwpx`, 경계 `1:36`이다. 인위적인 프로파일 보충은 제거했다.
 - CLI 프로세스가 이 fixture를 패치해 출력 파일을 만들고 즉시 재로드하는 동작을 검증한다.
-- 원본에 존재하는 `version.xml`, `settings.xml`, `Preview/PrvText.txt`, `Preview/PrvImage.png` passthrough 엔트리는 출력 ZIP에서 바이트 동일성을 검증한다.
+- 정상 재생성 대상을 제외한 모든 원본 passthrough 엔트리의 경로 집합과 바이트 동일성을 출력 ZIP에서 검증한다. 현재 fixture의 검증 대상에는 BinData가 포함된다.
 - `Contents/content.hpf`는 metadata, manifest의 리소스 ID/href/MIME/embedded 의미, spine 참조 순서를 비교한다. `image/jpg`와 `image/jpeg`는 의미 동등으로 정규화한다.
 - 경계 이전 모든 문단의 텍스트·스타일 참조·controls 심층 표현과 패치 전후 `doc_info`/BinData 심층 표현을 비교한다.
 - 통합 테스트 결과: 6 passed, 0 ignored.
