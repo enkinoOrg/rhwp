@@ -51,6 +51,10 @@ pub fn rank_body_boundaries(
                     score += 10;
                     reasons.push("앞쪽 문단이 비어 있음".to_string());
                 }
+                if score == 0 {
+                    document_index += 1;
+                    continue;
+                }
                 if total_paragraphs > 0 && document_index * 100 <= total_paragraphs * 5 {
                     score -= 20;
                     reasons.push("문서 앞 5% 이내에 위치함".to_string());
@@ -120,10 +124,14 @@ fn matches_heading_role(paragraph: &Paragraph, profile: &StyleProfile) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document_core::template_compiler::profile::analyze_style_profile;
+    use crate::document_core::template_compiler::profile::{
+        analyze_style_profile, RoleStyle, StyleProfile,
+    };
+    use crate::model::control::Control;
     use crate::model::document::{DocInfo, Document, Section};
     use crate::model::paragraph::{CharShapeRef, ColumnBreakType, Paragraph};
     use crate::model::style::{CharShape, ParaShape};
+    use std::collections::BTreeMap;
 
     fn paragraph(text: &str, para_shape_id: u16, char_shape_id: u32) -> Paragraph {
         Paragraph {
@@ -180,6 +188,21 @@ mod tests {
         }
     }
 
+    fn profile_for_heading(para_shape_id: u16, char_shape_id: u32) -> StyleProfile {
+        StyleProfile {
+            roles: BTreeMap::from([(
+                TemplateRole::SectionHeading,
+                RoleStyle {
+                    para_shape_id,
+                    char_shape_id,
+                    marker: None,
+                    confidence: 1.0,
+                    evidence: vec!["테스트 제목".to_string()],
+                },
+            )]),
+        }
+    }
+
     #[test]
     fn ranks_first_major_heading_after_front_matter_first() {
         let doc = boundary_fixture();
@@ -192,5 +215,123 @@ mod tests {
             .iter()
             .any(|reason| reason.contains("쪽 나눔")));
         assert!(candidates.len() <= 3);
+    }
+
+    #[test]
+    fn excludes_paragraphs_without_boundary_evidence() {
+        let doc = Document {
+            sections: vec![Section {
+                paragraphs: vec![
+                    paragraph("일반 본문 하나", 1, 1),
+                    paragraph("일반 본문 둘", 1, 1),
+                    paragraph("일반 본문 셋", 1, 1),
+                ],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let candidates = rank_body_boundaries(
+            &doc,
+            &StyleProfile {
+                roles: BTreeMap::new(),
+            },
+            3,
+        );
+
+        assert!(candidates.is_empty());
+    }
+
+    #[test]
+    fn applies_each_score_and_builds_bounded_previews() {
+        let mut paragraphs = (0..21)
+            .map(|index| paragraph(&format!("문단 {index}"), 2, 2))
+            .collect::<Vec<_>>();
+        paragraphs[0].text.clear();
+        paragraphs[1] = paragraph("첫 제목", 1, 1);
+        paragraphs[1].column_type = ColumnBreakType::Page;
+        paragraphs[1].controls.push(Control::Table(Box::default()));
+        let doc = Document {
+            sections: vec![Section {
+                paragraphs,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let candidates = rank_body_boundaries(&doc, &profile_for_heading(1, 1), 3);
+
+        assert_eq!(candidates[0].score, 40 + 25 + 10 - 20 - 30);
+        assert!(candidates[0]
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("제목 역할")));
+        assert!(candidates[0]
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("쪽 나눔")));
+        assert!(candidates[0]
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("비어 있음")));
+        assert!(candidates[0]
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("앞 5%")));
+        assert!(candidates[0]
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("표 컨트롤")));
+        assert!(candidates[0].before_preview.len() <= 2);
+        assert!(candidates[0].after_preview.len() <= 2);
+        assert!(candidates
+            .iter()
+            .all(|candidate| !candidate.reasons.is_empty()));
+    }
+
+    #[test]
+    fn sorts_ties_by_coordinates_and_caps_limit_at_three() {
+        let mut doc = Document {
+            sections: vec![Section::default(), Section::default()],
+            ..Default::default()
+        };
+        for section in &mut doc.sections {
+            section.paragraphs = (0..3)
+                .map(|index| {
+                    let mut paragraph = paragraph(&format!("후보 {index}"), 2, 2);
+                    paragraph.column_type = ColumnBreakType::Page;
+                    paragraph
+                })
+                .collect();
+        }
+
+        let candidates = rank_body_boundaries(
+            &doc,
+            &StyleProfile {
+                roles: BTreeMap::new(),
+            },
+            usize::MAX,
+        );
+
+        assert_eq!(candidates.len(), 3);
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|candidate| (candidate.section_index, candidate.paragraph_index))
+                .collect::<Vec<_>>(),
+            vec![(0, 1), (0, 2), (1, 0)]
+        );
+        assert!(candidates
+            .iter()
+            .all(|candidate| !candidate.reasons.is_empty()));
+
+        let limited = rank_body_boundaries(
+            &doc,
+            &StyleProfile {
+                roles: BTreeMap::new(),
+            },
+            2,
+        );
+        assert_eq!(limited.len(), 2);
     }
 }
