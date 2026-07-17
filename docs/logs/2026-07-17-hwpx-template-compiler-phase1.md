@@ -40,10 +40,20 @@
 - `samples/**/*.hwpx` 125개를 경로순으로 전수 검사했으며 모두 `DocumentCore::from_bytes`로 파싱됐다.
 - 분석기가 다섯 역할을 모두 추출한 fixture는 3개였다: `hwp3-sample16-hwp5.hwpx`, `hwpx/aift.hwpx`, `rowbreak-problem-pages.hwpx`.
 - 분석기 검증은 `samples/hwpx/aift.hwpx`로 분리해 다섯 역할을 모두 확인한다.
-- 안전한 추천 경계에서 패치·직렬화·재로드가 성공한 fixture는 9개였고, 통합 검증에는 작은 `samples/hwpx/para-unit-01.hwpx`와 경계 `0:2`를 사용했다.
-- 통합 fixture는 `Body`만 추출하므로, 분석된 유효 `Body` 스타일을 누락 역할에 보충한 테스트 프로파일을 사용한다. 패치·직렬화·재로드는 제품 공개 API를 그대로 호출한다.
-- `version.xml`, `settings.xml`, `Preview/PrvText.txt`, `Preview/PrvImage.png`는 재로드 후 원본 바이트와 동일하다. `Contents/content.hpf`는 본문 의존 manifest라 serializer가 재생성하도록 설계되어 동일성 비교에서 제외했다.
-- 통합 테스트 결과: 2 passed, 0 ignored.
+- 안전한 명시 경계까지 확장한 최종 통합 fixture는 다섯 역할을 실제 추출하는 `samples/rowbreak-problem-pages.hwpx`, 경계 `1:36`이다. 인위적인 프로파일 보충은 제거했다.
+- CLI 프로세스가 이 fixture를 패치해 출력 파일을 만들고 즉시 재로드하는 동작을 검증한다.
+- 원본에 존재하는 `version.xml`, `settings.xml`, `Preview/PrvText.txt`, `Preview/PrvImage.png` passthrough 엔트리는 출력 ZIP에서 바이트 동일성을 검증한다.
+- `Contents/content.hpf`는 metadata, manifest의 리소스 ID/href/MIME/embedded 의미, spine 참조 순서를 비교한다. `image/jpg`와 `image/jpeg`는 의미 동등으로 정규화한다.
+- 경계 이전 모든 문단의 텍스트·스타일 참조·controls 심층 표현과 패치 전후 `doc_info`/BinData 심층 표현을 비교한다.
+- 통합 테스트 결과: 6 passed, 0 ignored.
 - 관련 템플릿 컴파일러 테스트: 11 passed, 0 ignored.
 - 최종 전체 테스트: 2563 passed, 22 ignored. Task 4 ignored는 0건이며 22건은 기존 테스트다.
 - 최종 release build와 `git diff --check`: 성공.
+
+## CLI 입력과 경계 선택 검토
+
+- `.hwpx` 확장자만 허용하고 ZIP `mimetype`이 `application/hwp+zip`인지 확인한다.
+- `.hwp` 입력과 HWP 바이트를 `.hwpx`로 바꾼 입력을 모두 fail-loud로 거부한다.
+- 사용자 경계가 추천 후보 좌표와 같으면 추천 후보의 score, preview, reasons를 `selectedBoundary`로 재사용한다.
+- 추천 후보와 다르면 `user-selected boundary` 근거를 가진 별도 `selectedBoundary`를 JSON으로 출력한다.
+- 최종 검증: Task 4 통합 6 passed/0 ignored, 관련 템플릿 컴파일러 11 passed, 전체 2567 passed/22 ignored, release build와 diff check 성공. ignored 22건은 기존 테스트다.

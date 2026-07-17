@@ -243,6 +243,7 @@ fn template_spike(args: &[String]) {
     }
 
     let input = &args[0];
+    validate_hwpx_input(input);
     let mut boundary = None;
     let mut output = None;
     let mut index = 1;
@@ -284,16 +285,35 @@ fn template_spike(args: &[String]) {
     });
     let profile = analyze_style_profile(core.document());
     let candidates = rank_body_boundaries(core.document(), &profile, 3);
+    let selected = boundary.map(|(section_index, paragraph_index)| {
+        candidates
+            .iter()
+            .find(|candidate| {
+                candidate.section_index == section_index
+                    && candidate.paragraph_index == paragraph_index
+            })
+            .cloned()
+            .unwrap_or_else(|| BoundaryCandidate {
+                section_index,
+                paragraph_index,
+                score: 0,
+                heading: String::new(),
+                before_preview: Vec::new(),
+                after_preview: Vec::new(),
+                reasons: vec!["user-selected boundary".to_string()],
+            })
+    });
     println!(
         "{}",
         serde_json::to_string_pretty(&serde_json::json!({
             "styleProfile": profile,
             "boundaryCandidates": candidates,
+            "selectedBoundary": selected,
         }))
         .expect("분석 JSON 직렬화")
     );
 
-    let Some((section_index, paragraph_index)) = boundary else {
+    let Some(selected) = selected else {
         if output.is_some() {
             eprintln!("오류: -o는 --boundary와 함께 사용해야 합니다.");
             std::process::exit(1);
@@ -303,15 +323,6 @@ fn template_spike(args: &[String]) {
     let Some(output) = output else {
         eprintln!("오류: --boundary를 사용할 때는 -o 출력 경로가 필요합니다.");
         std::process::exit(1);
-    };
-    let selected = BoundaryCandidate {
-        section_index,
-        paragraph_index,
-        score: 0,
-        heading: String::new(),
-        before_preview: Vec::new(),
-        after_preview: Vec::new(),
-        reasons: vec!["사용자가 명시한 경계".to_string()],
     };
     let draft = vec![
         DraftBlock::SectionHeading("1. 기획 개요".into()),
@@ -345,6 +356,35 @@ fn template_spike(args: &[String]) {
         std::process::exit(1);
     });
     println!("HWPX 패치 및 재로드 성공: {output}");
+}
+
+fn validate_hwpx_input(input: &str) {
+    use std::io::Read;
+
+    if !Path::new(input)
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("hwpx"))
+    {
+        eprintln!("오류: template-spike 입력은 .hwpx 확장자여야 합니다.");
+        std::process::exit(1);
+    }
+    let bytes = fs::read(input).unwrap_or_else(|error| {
+        eprintln!("오류: 템플릿을 읽을 수 없습니다: {error}");
+        std::process::exit(1);
+    });
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap_or_else(|_| {
+        eprintln!("오류: 입력 파일이 HWPX ZIP 형식이 아닙니다.");
+        std::process::exit(1);
+    });
+    let mut mimetype = String::new();
+    let valid_mimetype = archive
+        .by_name("mimetype")
+        .ok()
+        .is_some_and(|mut entry| entry.read_to_string(&mut mimetype).is_ok());
+    if !valid_mimetype || mimetype.trim() != "application/hwp+zip" {
+        eprintln!("오류: 입력 ZIP의 mimetype이 HWPX 형식이 아닙니다.");
+        std::process::exit(1);
+    }
 }
 
 fn parse_template_boundary(value: &str) -> Option<(usize, usize)> {

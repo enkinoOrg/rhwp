@@ -262,16 +262,18 @@ rtk git commit -m "HWPX 템플릿 본문 패치"
 ```rust
 #[test]
 fn patches_serializes_and_reloads_real_hwpx() {
-    let bytes = std::fs::read("samples/hwpx_sample2.hwpx").unwrap();
+    let bytes = std::fs::read("samples/rowbreak-problem-pages.hwpx").unwrap();
     let mut core = rhwp::DocumentCore::from_bytes(&bytes).unwrap();
-    let original_aux = core.document().hwpx_aux_entries.clone();
+    let original_aux = zip_passthrough_aux_entries(&bytes);
+    let original_content_hpf = content_hpf_semantics(&bytes);
     let profile = analyze_style_profile(core.document());
-    let boundary = rank_body_boundaries(core.document(), &profile, 3).remove(0);
+    let boundary = user_selected_boundary(1, 36);
     let patched = patch_template(core.document(), &boundary, &profile, &phase1_draft()).unwrap();
     core.set_document(patched);
     let output = core.export_hwpx_native().unwrap();
     let reloaded = rhwp::DocumentCore::from_bytes(&output).unwrap();
-    assert_eq!(reloaded.document().hwpx_aux_entries, original_aux);
+    assert_eq!(zip_passthrough_aux_entries(&output), original_aux);
+    assert_eq!(content_hpf_semantics(&output), original_content_hpf);
     assert!(reloaded.document().sections.iter().any(|s| s.paragraphs.iter().any(|p| p.text.contains("기획 개요"))));
 }
 ```
@@ -337,5 +339,6 @@ rtk git commit -m "HWPX 템플릿 컴파일러 1단계 검증"
 - [ ] `rtk cargo test`가 skipped 0으로 성공한다.
 - [ ] `rtk cargo build --release`가 성공한다.
 - [ ] 생성 HWPX를 `DocumentCore::from_bytes`가 다시 로드한다.
-- [ ] 선택 경계 앞의 원본 IR과 `hwpx_aux_entries`가 유지된다.
+- [ ] 선택 경계 앞 문단의 controls 심층 표현과 `doc_info`/전역 리소스 의미가 유지된다.
+- [ ] 기존 passthrough aux 엔트리는 바이트가 동일하고, `content.hpf`의 metadata·manifest 리소스 참조·spine 의미가 유지된다.
 - [ ] 작업 결과와 미지원 범위가 `docs/logs`에 기록된다.

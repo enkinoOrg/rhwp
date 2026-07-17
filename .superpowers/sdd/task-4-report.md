@@ -38,11 +38,24 @@ DONE
 - `samples/**/*.hwpx` 125개 전부 파싱, 다섯 역할 추출 fixture 3개 확인.
 - 안전 경계 patch/export/reload 성공 fixture 9개 확인.
 - 분석기 검증: `samples/hwpx/aift.hwpx`, 다섯 역할 모두 추출.
-- 통합 검증: `samples/hwpx/para-unit-01.hwpx`, 경계 `0:2`, 테스트용 프로파일 보충 후 제품 API patch/set/export/reload 성공.
-- RED: `para-unit-01.hwpx`의 전체 `hwpx_aux_entries` 비교는 본문 의존 `Contents/content.hpf` 재생성 때문에 실패했다.
-- GREEN: serializer의 passthrough 계약 대상 4개 auxiliary 엔트리의 원본 바이트 보존과 경계 앞 IR 보존, 초안 텍스트 재로드를 검증한다.
-- `cargo test --test template_compiler_phase1`: 2 passed, 0 ignored.
+- 최종 통합 검증: `samples/rowbreak-problem-pages.hwpx`, 명시 경계 `1:36`, 실제 추출된 다섯 역할만 사용해 CLI와 제품 API patch/set/export/reload 성공.
+- RED: HWP 입력이 성공 종료하고, 비추천 사용자 경계가 JSON에 기록되지 않으며, 전체 aux 바이트 비교가 재생성 `content.hpf` 때문에 실패했다.
+- GREEN: 확장자+ZIP mimetype 검증, `selectedBoundary` 근거 출력, passthrough aux 바이트 보존, `content.hpf` metadata/manifest/spine 의미 보존, 경계 앞 controls와 전역 리소스 불변을 검증한다.
+- `cargo test --test template_compiler_phase1`: 6 passed, 0 ignored.
 - 관련 템플릿 컴파일러 테스트: 11 passed, 0 ignored.
 - 전체 테스트: 2563 passed, 22 ignored. Task 4 ignored는 0건이다.
 - release build: 성공.
 - `git diff --check`: 성공.
+
+## 전체 리뷰 반영 검증
+
+- HWPX 확장자와 ZIP mimetype을 모두 검사하고 HWP 및 확장자 위장 HWP를 거부한다.
+- 실제 다섯 역할 profile과 안전한 명시 경계를 가진 `rowbreak-problem-pages.hwpx`로 CLI 프로세스 성공, 파일 생성, 재로드를 검증한다.
+- 추천 후보 선택은 기존 score/preview/reasons를 재사용하고 비추천 경계는 `user-selected boundary` 이유를 출력한다.
+- 경계 이전 controls 심층 표현, `doc_info`, BinData 의미 불변을 검증한다.
+- passthrough aux는 원본에 존재하는 엔트리의 ZIP 바이트 동일성을 검증한다.
+- `content.hpf`는 metadata와 manifest 리소스 참조 및 spine 순서의 의미 동일성을 검증한다.
+- Task 4 통합: 6 passed, 0 ignored.
+- 관련 템플릿 컴파일러: 11 passed.
+- 전체: 2567 passed, 22 ignored. ignored 22건은 기존 테스트다.
+- release build와 `git diff --check`: 성공.
