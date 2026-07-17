@@ -1,5 +1,6 @@
 use crate::document_core::template_compiler::boundary::BoundaryCandidate;
 use crate::document_core::template_compiler::profile::{StyleProfile, TemplateRole};
+use crate::model::control::Control;
 use crate::model::document::Document;
 use crate::model::paragraph::{CharShapeRef, Paragraph};
 
@@ -20,6 +21,15 @@ pub enum TemplateCompileError {
     InvalidBoundary { section: usize, paragraph: usize },
     #[snafu(display("템플릿 역할이 없습니다: {role:?}"))]
     MissingRole { role: TemplateRole },
+    #[snafu(display(
+        "Phase 1에서 삭제할 수 없는 구조입니다: section={section}, paragraph={paragraph}, control={control}, kind={kind}"
+    ))]
+    UnsupportedStructure {
+        section: usize,
+        paragraph: usize,
+        control: usize,
+        kind: String,
+    },
 }
 
 pub fn patch_template(
@@ -40,6 +50,8 @@ pub fn patch_template(
             paragraph: boundary.paragraph_index,
         });
     }
+
+    validate_replacement_range(document, boundary)?;
 
     let paragraphs = blocks
         .iter()
@@ -80,6 +92,64 @@ pub fn patch_template(
     Ok(patched)
 }
 
+fn validate_replacement_range(
+    document: &Document,
+    boundary: &BoundaryCandidate,
+) -> Result<(), TemplateCompileError> {
+    for (section_index, section) in document
+        .sections
+        .iter()
+        .enumerate()
+        .skip(boundary.section_index)
+    {
+        let paragraph_start = if section_index == boundary.section_index {
+            boundary.paragraph_index
+        } else {
+            0
+        };
+        for (paragraph_index, paragraph) in
+            section.paragraphs.iter().enumerate().skip(paragraph_start)
+        {
+            if let Some((control_index, control)) = paragraph.controls.iter().enumerate().next() {
+                return Err(TemplateCompileError::UnsupportedStructure {
+                    section: section_index,
+                    paragraph: paragraph_index,
+                    control: control_index,
+                    kind: control_kind(control).to_string(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn control_kind(control: &Control) -> &'static str {
+    match control {
+        Control::SectionDef(_) => "구역 정의",
+        Control::ColumnDef(_) => "단 정의",
+        Control::Table(_) => "표",
+        Control::Shape(_) => "도형",
+        Control::Picture(_) => "그림",
+        Control::Header(_) => "머리말",
+        Control::Footer(_) => "꼬리말",
+        Control::Footnote(_) => "각주",
+        Control::Endnote(_) => "미주",
+        Control::AutoNumber(_) => "자동 번호",
+        Control::NewNumber(_) => "새 번호",
+        Control::PageNumberPos(_) => "쪽 번호 위치",
+        Control::Bookmark(_) => "책갈피",
+        Control::Hyperlink(_) => "하이퍼링크",
+        Control::Ruby(_) => "덧말",
+        Control::CharOverlap(_) => "글자 겹침",
+        Control::PageHide(_) => "감추기",
+        Control::HiddenComment(_) => "숨은 설명",
+        Control::Equation(_) => "수식",
+        Control::Field(_) => "필드",
+        Control::Form(_) => "양식 개체",
+        Control::Unknown(_) => "알 수 없는 컨트롤",
+    }
+}
+
 impl DraftBlock {
     fn role_and_text(&self) -> (TemplateRole, &str) {
         match self {
@@ -110,6 +180,7 @@ mod tests {
     use crate::document_core::template_compiler::profile::{RoleStyle, StyleProfile, TemplateRole};
     use crate::model::control::Control;
     use crate::model::document::{DocInfo, Document, Section};
+    use crate::model::image::Picture;
     use crate::model::paragraph::{CharShapeRef, LineSeg, Paragraph};
     use crate::model::style::CharShape;
     use std::collections::BTreeMap;
@@ -334,5 +405,94 @@ mod tests {
 
         assert!(patched.sections[1].paragraphs.is_empty());
         assert!(patched.sections[1].raw_stream.is_none());
+    }
+
+    #[test]
+    fn rejects_table_in_selected_tail_without_mutating_original() {
+        let mut original = patch_fixture();
+        original.sections[0].paragraphs[4]
+            .controls
+            .push(Control::Table(Box::default()));
+        let before = original.sections[0]
+            .paragraphs
+            .iter()
+            .map(|paragraph| (paragraph.text.clone(), paragraph.controls.len()))
+            .collect::<Vec<_>>();
+
+        let result = patch_template(&original, &candidate(0, 3), &profile(), &draft());
+
+        assert!(matches!(
+            result,
+            Err(TemplateCompileError::UnsupportedStructure {
+                section: 0,
+                paragraph: 4,
+                control: 0,
+                ref kind,
+            }) if kind == "표"
+        ));
+        assert_eq!(
+            original.sections[0]
+                .paragraphs
+                .iter()
+                .map(|paragraph| (paragraph.text.clone(), paragraph.controls.len()))
+                .collect::<Vec<_>>(),
+            before
+        );
+    }
+
+    #[test]
+    fn rejects_picture_in_later_section_without_mutating_original() {
+        let mut original = patch_fixture();
+        original.sections.push(Section {
+            paragraphs: vec![paragraph("후속 그림", 2, 2)],
+            raw_stream: Some(vec![7, 8, 9]),
+            ..Default::default()
+        });
+        original.sections[1].paragraphs[0]
+            .controls
+            .push(Control::Picture(Box::<Picture>::default()));
+        let before = original
+            .sections
+            .iter()
+            .map(|section| {
+                (
+                    section
+                        .paragraphs
+                        .iter()
+                        .map(|paragraph| (paragraph.text.clone(), paragraph.controls.len()))
+                        .collect::<Vec<_>>(),
+                    section.raw_stream.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let result = patch_template(&original, &candidate(0, 3), &profile(), &draft());
+
+        assert!(matches!(
+            result,
+            Err(TemplateCompileError::UnsupportedStructure {
+                section: 1,
+                paragraph: 0,
+                control: 0,
+                ref kind,
+            }) if kind == "그림"
+        ));
+        assert_eq!(
+            original
+                .sections
+                .iter()
+                .map(|section| {
+                    (
+                        section
+                            .paragraphs
+                            .iter()
+                            .map(|paragraph| (paragraph.text.clone(), paragraph.controls.len()))
+                            .collect::<Vec<_>>(),
+                        section.raw_stream.clone(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            before
+        );
     }
 }
