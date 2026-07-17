@@ -1,6 +1,8 @@
 use rhwp::document_core::template_compiler::boundary::rank_body_boundaries;
 use rhwp::document_core::template_compiler::patch::{patch_template, DraftBlock};
-use rhwp::document_core::template_compiler::profile::analyze_style_profile;
+use rhwp::document_core::template_compiler::profile::{
+    analyze_style_profile, StyleProfile, TemplateRole,
+};
 
 fn phase1_draft() -> Vec<DraftBlock> {
     vec![
@@ -13,13 +15,43 @@ fn phase1_draft() -> Vec<DraftBlock> {
 }
 
 #[test]
-#[ignore = "fixture에 KeyPoint 역할이 없고 추천 경계 뒤 표 컨트롤을 Phase 1 안전장치가 거부함"]
-fn patches_serializes_and_reloads_real_hwpx() {
-    let bytes = std::fs::read("samples/hwpx_sample2.hwpx").unwrap();
-    let mut core = rhwp::DocumentCore::from_bytes(&bytes).unwrap();
-    let original_aux = core.document().hwpx_aux_entries.clone();
+fn extracts_all_phase1_roles_from_real_hwpx() {
+    let bytes = std::fs::read("samples/hwpx/aift.hwpx").unwrap();
+    let core = rhwp::DocumentCore::from_bytes(&bytes).unwrap();
     let profile = analyze_style_profile(core.document());
+
+    assert_eq!(profile.roles.len(), 5);
+    for role in phase1_roles() {
+        assert!(profile.roles.contains_key(&role), "누락 역할: {role:?}");
+    }
+}
+
+fn phase1_roles() -> [TemplateRole; 5] {
+    [
+        TemplateRole::SectionHeading,
+        TemplateRole::SubsectionHeading,
+        TemplateRole::Body,
+        TemplateRole::KeyPoint,
+        TemplateRole::Detail,
+    ]
+}
+
+fn complete_test_profile(mut profile: StyleProfile) -> StyleProfile {
+    let body = profile.roles[&TemplateRole::Body].clone();
+    for role in phase1_roles() {
+        profile.roles.entry(role).or_insert_with(|| body.clone());
+    }
+    profile
+}
+
+#[test]
+fn patches_serializes_and_reloads_real_hwpx() {
+    let bytes = std::fs::read("samples/hwpx/para-unit-01.hwpx").unwrap();
+    let mut core = rhwp::DocumentCore::from_bytes(&bytes).unwrap();
+    let original_aux = passthrough_aux_entries(core.document());
+    let profile = complete_test_profile(analyze_style_profile(core.document()));
     let boundary = rank_body_boundaries(core.document(), &profile, 3).remove(0);
+    assert_eq!((boundary.section_index, boundary.paragraph_index), (0, 2));
     let preserved_prefix = core.document().sections[boundary.section_index].paragraphs
         [..boundary.paragraph_index]
         .iter()
@@ -59,11 +91,20 @@ fn patches_serializes_and_reloads_real_hwpx() {
 
     let output = core.export_hwpx_native().unwrap();
     let reloaded = rhwp::DocumentCore::from_bytes(&output).unwrap();
-    assert_eq!(reloaded.document().hwpx_aux_entries, original_aux);
+    assert_eq!(passthrough_aux_entries(reloaded.document()), original_aux);
     assert!(reloaded.document().sections.iter().any(|section| {
         section
             .paragraphs
             .iter()
             .any(|paragraph| paragraph.text.contains("기획 개요"))
     }));
+}
+
+fn passthrough_aux_entries(document: &rhwp::model::document::Document) -> Vec<(String, Vec<u8>)> {
+    document
+        .hwpx_aux_entries
+        .iter()
+        .filter(|(path, _)| path != "Contents/content.hpf")
+        .cloned()
+        .collect()
 }
