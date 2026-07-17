@@ -46,6 +46,10 @@ fn reload_preserves_deep_semantics_against_canonical_roundtrip_excluding_raw_nor
         .iter()
         .map(|(path, _)| path.as_str())
         .collect::<Vec<_>>();
+    assert!(
+        original_aux_paths.contains(&"BinData/image1.bmp"),
+        "passthrough 분류는 하드코딩된 보조 파일뿐 아니라 재생성 대상이 아닌 모든 ZIP 엔트리를 포함해야 한다"
+    );
     let original_hpf = content_hpf_semantics(&bytes);
     let original_doc_info = format!("{:#?}", core.document().doc_info);
     let original_resources = format!("{:#?}", core.document().bin_data_content);
@@ -79,6 +83,19 @@ fn reload_preserves_deep_semantics_against_canonical_roundtrip_excluding_raw_nor
     let output = core.export_hwpx_native().unwrap();
     let reloaded = rhwp::DocumentCore::from_bytes(&output).unwrap();
     assert_eq!(
+        reloaded.document().sections.len(),
+        canonical.document().sections.len(),
+        "patch/export/reload가 구역을 추가해 예상 밖 빈 페이지를 만들면 안 된다"
+    );
+    assert!(
+        reloaded
+            .document()
+            .sections
+            .iter()
+            .all(|section| !section.paragraphs.is_empty()),
+        "현재 fixture는 마지막 구역을 패치하므로 빈 후속 구역이 없어야 한다"
+    );
+    assert_eq!(
         preserved_paragraphs(reloaded.document(), &boundary),
         canonical_prefix
     );
@@ -94,7 +111,22 @@ fn reload_preserves_deep_semantics_against_canonical_roundtrip_excluding_raw_nor
         .into_iter()
         .filter(|(path, _)| original_aux_paths.contains(&path.as_str()))
         .collect::<Vec<_>>();
-    assert_eq!(output_aux, original_aux);
+    assert_eq!(
+        output_aux.iter().map(|(path, _)| path).collect::<Vec<_>>(),
+        original_aux
+            .iter()
+            .map(|(path, _)| path)
+            .collect::<Vec<_>>()
+    );
+    for ((output_path, output_bytes), (original_path, original_bytes)) in
+        output_aux.iter().zip(&original_aux)
+    {
+        assert_eq!(output_path, original_path);
+        assert_eq!(
+            output_bytes, original_bytes,
+            "passthrough 바이트 변경: {output_path}"
+        );
+    }
     assert_eq!(content_hpf_semantics(&output), original_hpf);
     assert!(reloaded.document().sections.iter().any(|section| {
         section
@@ -298,17 +330,41 @@ fn temp_path(name: &str) -> std::path::PathBuf {
 
 fn zip_passthrough_aux_entries(hwpx: &[u8]) -> Vec<(String, Vec<u8>)> {
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(hwpx)).unwrap();
-    [
-        "version.xml",
-        "settings.xml",
-        "Preview/PrvText.txt",
-        "Preview/PrvImage.png",
-    ]
-    .into_iter()
-    .filter_map(|path| {
-        let mut bytes = Vec::new();
-        archive.by_name(path).ok()?.read_to_end(&mut bytes).unwrap();
-        Some((path.to_string(), bytes))
-    })
-    .collect()
+    let paths = (0..archive.len())
+        .filter_map(|index| {
+            let path = archive.by_index(index).ok()?.name().to_string();
+            (!is_normally_regenerated_entry(&path)).then_some(path)
+        })
+        .collect::<Vec<_>>();
+    let mut entries = paths
+        .into_iter()
+        .filter_map(|path| {
+            let mut bytes = Vec::new();
+            archive
+                .by_name(&path)
+                .ok()?
+                .read_to_end(&mut bytes)
+                .unwrap();
+            Some((path, bytes))
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    entries
+}
+
+fn is_normally_regenerated_entry(path: &str) -> bool {
+    path == "mimetype"
+        || path == "Contents/content.hpf"
+        || path == "Contents/header.xml"
+        || path == "META-INF/container.rdf"
+        || path == "META-INF/container.xml"
+        || path == "META-INF/manifest.xml"
+        || numbered_xml_entry(path, "Contents/section")
+        || numbered_xml_entry(path, "Contents/masterpage")
+}
+
+fn numbered_xml_entry(path: &str, prefix: &str) -> bool {
+    path.strip_prefix(prefix)
+        .and_then(|suffix| suffix.strip_suffix(".xml"))
+        .is_some_and(|index| !index.is_empty() && index.bytes().all(|byte| byte.is_ascii_digit()))
 }

@@ -15,6 +15,8 @@
 - 스타일 추론 결과와 경계 후보에는 점수와 판정 근거를 포함한다.
 - 지원하지 못하는 구조는 조용히 삭제하지 않고 오류로 반환한다.
 - Phase 1은 제목·본문·핵심항목·세부항목 텍스트만 삽입한다.
+- 경계 뒤의 후속 구역은 구역 노드와 설정을 보존하고 문단만 비운다. 마지막 구역을 패치하는 통합 fixture에서는 patch/export/reload 뒤 구역 수가 늘지 않고 빈 구역이 생기지 않는 현재 페이지 계약을 검증한다.
+- `BoundaryCandidate`의 "보존 마지막 앵커"와 "교체 첫 앵커" 명시 필드는 Phase 2 API TODO다. Phase 1 공개 타입은 확장하지 않는다.
 - 표, 이미지, Markdown 파싱, AI 작성과 페이지 축약은 후속 Phase로 남긴다.
 - 모든 shell 명령은 프로젝트 규칙에 따라 `rtk`로 실행한다.
 
@@ -340,5 +342,5 @@ rtk git commit -m "HWPX 템플릿 컴파일러 1단계 검증"
 - [ ] `rtk cargo build --release`가 성공한다.
 - [ ] 생성 HWPX를 `DocumentCore::from_bytes`가 다시 로드한다.
 - [ ] 선택 경계 앞 문단의 controls 심층 표현과 `doc_info`/전역 리소스 의미가 유지된다.
-- [ ] 기존 passthrough aux 엔트리는 바이트가 동일하고, `content.hpf`의 metadata·manifest 리소스 참조·spine 의미가 유지된다.
+- [ ] 원본 ZIP의 모든 엔트리를 역할별로 분류하고 mimetype, header/content/section/masterpage XML, META-INF처럼 정상 재생성되는 대상을 명시적으로 제외한 모든 passthrough 엔트리의 경로 집합과 바이트가 동일하며, `content.hpf`의 metadata·manifest 리소스 참조·spine 의미가 유지된다.
 - [ ] 작업 결과와 미지원 범위가 `docs/logs`에 기록된다.
