@@ -25,6 +25,12 @@ bindings/Native/Cargo.lock
 .vscode/
 .idea/
 
+# CodeGraph 로컬 인덱스
+.codegraph/
+
+# 로컬 Git worktree
+.worktrees/
+
 # OS
 .DS_Store
 Thumbs.db
