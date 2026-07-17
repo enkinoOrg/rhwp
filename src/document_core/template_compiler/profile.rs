@@ -58,11 +58,11 @@ pub fn analyze_style_profile(document: &Document) -> StyleProfile {
             *marker_frequencies.entry((marker, key)).or_default() += 1;
         } else {
             *frequencies.entry(key).or_default() += 1;
-        }
 
-        let evidence = heading_evidence.entry(key).or_default();
-        evidence.0 += 1;
-        evidence.1 |= starts_with_number(text);
+            let evidence = heading_evidence.entry(key).or_default();
+            evidence.0 += 1;
+            evidence.1 |= starts_with_number(text);
+        }
     }
 
     let mut roles = BTreeMap::new();
@@ -279,7 +279,10 @@ mod tests {
     fn excludes_emphasized_marker_styles_from_heading_candidates() {
         let profile = analyze_style_profile(&fixture_document());
 
-        assert_eq!(profile.roles[&TemplateRole::SectionHeading].para_shape_id, 3);
+        assert_eq!(
+            profile.roles[&TemplateRole::SectionHeading].para_shape_id,
+            3
+        );
         assert_eq!(
             profile.roles[&TemplateRole::SubsectionHeading].para_shape_id,
             4

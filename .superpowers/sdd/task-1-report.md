@@ -23,3 +23,10 @@
 - 빈도 집계와 동률 해소에 `BTreeMap` 및 명시적 정렬을 사용해 결과가 반복 실행에서 동일하다.
 - 구현 범위는 Phase 1 역할 추출에 한정했으며 별도 추상화나 후속 단계 기능을 추가하지 않았다.
 - 알려진 우려사항은 없다.
+
+## 리뷰 수정
+
+- 마커 문단은 마커 역할 빈도에만 집계하고 제목 후보 근거에서는 제외하도록 분리했다.
+- 굵기·큰 글자·문단 간격을 가진 서로 다른 `○`/`-` 전용 스타일이 제목으로 선택되는 회귀 테스트를 RED로 확인한 뒤 최소 수정으로 GREEN을 확인했다.
+- 동일 점수의 제목 스타일 두 개를 fixture에 추가해 작은 `(para_shape_id, char_shape_id)`가 SectionHeading, 다음 스타일이 SubsectionHeading이 되는 단계 순서와 동률 해소를 고정했다.
+- `rtk cargo fmt --check`, `rtk cargo test template_compiler::profile`, `rtk cargo test --lib`, `rtk git diff --check`: 모두 통과, skipped 0.
