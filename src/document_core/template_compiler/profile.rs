@@ -202,31 +202,48 @@ mod tests {
     }
 
     fn fixture_document() -> Document {
-        let mut heading = CharShape::default();
-        heading.base_size = 1_800;
-        heading.bold = true;
+        let mut marker = CharShape::default();
+        marker.base_size = 1_800;
+        marker.bold = true;
+
+        let heading = marker.clone();
 
         let mut body = CharShape::default();
         body.base_size = 1_000;
 
-        let mut heading_para = ParaShape::default();
-        heading_para.spacing_before = 300;
-        heading_para.spacing_after = 200;
+        let mut emphasized_para = ParaShape::default();
+        emphasized_para.spacing_before = 300;
+        emphasized_para.spacing_after = 200;
 
         Document {
             doc_info: crate::model::document::DocInfo {
-                char_shapes: vec![CharShape::default(), heading, body],
-                para_shapes: vec![ParaShape::default(), heading_para, ParaShape::default()],
+                char_shapes: vec![
+                    CharShape::default(),
+                    marker.clone(),
+                    marker,
+                    heading.clone(),
+                    heading,
+                    body,
+                ],
+                para_shapes: vec![
+                    ParaShape::default(),
+                    emphasized_para.clone(),
+                    emphasized_para.clone(),
+                    emphasized_para.clone(),
+                    emphasized_para,
+                    ParaShape::default(),
+                ],
                 ..Default::default()
             },
             sections: vec![Section {
                 paragraphs: vec![
-                    paragraph("1. 사업 개요", 1, 1),
-                    paragraph("일반 본문 첫째", 2, 2),
-                    paragraph("일반 본문 둘째", 2, 2),
-                    paragraph("일반 본문 셋째", 2, 2),
-                    paragraph("○ 핵심 사항", 2, 2),
+                    paragraph("○ 핵심 사항", 1, 1),
                     paragraph("- 세부 사항", 2, 2),
+                    paragraph("사업 개요", 3, 3),
+                    paragraph("추진 범위", 4, 4),
+                    paragraph("일반 본문 첫째", 5, 5),
+                    paragraph("일반 본문 둘째", 5, 5),
+                    paragraph("일반 본문 셋째", 5, 5),
                 ],
                 ..Default::default()
             }],
@@ -240,9 +257,13 @@ mod tests {
         let profile = analyze_style_profile(&doc);
         assert_eq!(
             profile.roles[&TemplateRole::SectionHeading].para_shape_id,
-            1
+            3
         );
-        assert_eq!(profile.roles[&TemplateRole::Body].para_shape_id, 2);
+        assert_eq!(
+            profile.roles[&TemplateRole::SubsectionHeading].para_shape_id,
+            4
+        );
+        assert_eq!(profile.roles[&TemplateRole::Body].para_shape_id, 5);
         assert_eq!(
             profile.roles[&TemplateRole::KeyPoint].marker.as_deref(),
             Some("○")
@@ -252,5 +273,16 @@ mod tests {
             Some("-")
         );
         assert!(profile.roles.values().all(|role| role.confidence > 0.0));
+    }
+
+    #[test]
+    fn excludes_emphasized_marker_styles_from_heading_candidates() {
+        let profile = analyze_style_profile(&fixture_document());
+
+        assert_eq!(profile.roles[&TemplateRole::SectionHeading].para_shape_id, 3);
+        assert_eq!(
+            profile.roles[&TemplateRole::SubsectionHeading].para_shape_id,
+            4
+        );
     }
 }
