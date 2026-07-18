@@ -12,7 +12,6 @@ pub mod converters;
 pub(crate) mod html_table_import;
 pub mod queries;
 pub mod table_calc;
-pub mod template_compiler;
 pub mod validation;
 
 use crate::model::document::Document;

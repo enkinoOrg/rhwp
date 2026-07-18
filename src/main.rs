@@ -51,7 +51,6 @@ fn main() {
         Some("hwpx-roundtrip") => rhwp::diagnostics::hwpx_roundtrip_batch::run(&args[2..]),
         Some("render-diff") => rhwp::diagnostics::render_geom_diff::run(&args[2..]),
         Some("thumbnail") => extract_thumbnail(&args[2..]),
-        Some("template-spike") => template_spike(&args[2..]),
         _ => {
             println!("rhwp v{}", rhwp::version());
             println!("사용법: rhwp <명령> [옵션]");
@@ -215,9 +214,6 @@ fn print_help() {
     println!("      --base64                  base64 문자열을 stdout에 출력");
     println!("      --data-uri                data:image/... URI 형식으로 stdout에 출력");
     println!();
-    println!("  template-spike <템플릿.hwpx> [--boundary <구역>:<문단> -o <출력.hwpx>]");
-    println!("      HWPX 템플릿 역할과 본문 경계 후보를 분석하고 Phase 1 초안을 패치");
-    println!();
     println!("내부 개발·회귀 도구 (일반 사용자 대상 아님):");
     println!("  test-caption <파일.hwp>             캡션 라운드트립 검증");
     println!("  test-field <파일.hwp>               필드 라운드트립 검증");
@@ -228,168 +224,6 @@ fn print_help() {
     println!("옵션:");
     println!("  -h, --help      도움말 표시");
     println!("  -V, --version   버전 표시");
-}
-
-fn template_spike(args: &[String]) {
-    use rhwp::document_core::template_compiler::boundary::{
-        rank_body_boundaries, BoundaryCandidate,
-    };
-    use rhwp::document_core::template_compiler::patch::{patch_template, DraftBlock};
-    use rhwp::document_core::template_compiler::profile::analyze_style_profile;
-
-    if args.is_empty() {
-        eprintln!("사용법: rhwp template-spike <템플릿.hwpx> [--boundary S:P -o 출력.hwpx]");
-        std::process::exit(1);
-    }
-
-    let input = &args[0];
-    validate_hwpx_input(input);
-    let mut boundary = None;
-    let mut output = None;
-    let mut index = 1;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--boundary" => {
-                index += 1;
-                boundary = args
-                    .get(index)
-                    .and_then(|value| parse_template_boundary(value));
-                if boundary.is_none() {
-                    eprintln!("오류: --boundary는 <구역>:<문단> 형식이어야 합니다.");
-                    std::process::exit(1);
-                }
-            }
-            "-o" | "--output" => {
-                index += 1;
-                output = args.get(index).cloned();
-                if output.is_none() {
-                    eprintln!("오류: 출력 경로가 필요합니다.");
-                    std::process::exit(1);
-                }
-            }
-            option => {
-                eprintln!("오류: 알 수 없는 옵션입니다: {option}");
-                std::process::exit(1);
-            }
-        }
-        index += 1;
-    }
-
-    let bytes = fs::read(input).unwrap_or_else(|error| {
-        eprintln!("오류: 템플릿을 읽을 수 없습니다: {error}");
-        std::process::exit(1);
-    });
-    let mut core = rhwp::DocumentCore::from_bytes(&bytes).unwrap_or_else(|error| {
-        eprintln!("오류: HWPX를 로드할 수 없습니다: {error}");
-        std::process::exit(1);
-    });
-    let profile = analyze_style_profile(core.document());
-    let candidates = rank_body_boundaries(core.document(), &profile, 3);
-    let selected = boundary.map(|(section_index, paragraph_index)| {
-        candidates
-            .iter()
-            .find(|candidate| {
-                candidate.section_index == section_index
-                    && candidate.paragraph_index == paragraph_index
-            })
-            .cloned()
-            .unwrap_or_else(|| BoundaryCandidate {
-                section_index,
-                paragraph_index,
-                score: 0,
-                heading: String::new(),
-                before_preview: Vec::new(),
-                after_preview: Vec::new(),
-                reasons: vec!["user-selected boundary".to_string()],
-            })
-    });
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&serde_json::json!({
-            "styleProfile": profile,
-            "boundaryCandidates": candidates,
-            "selectedBoundary": selected,
-        }))
-        .expect("분석 JSON 직렬화")
-    );
-
-    let Some(selected) = selected else {
-        if output.is_some() {
-            eprintln!("오류: -o는 --boundary와 함께 사용해야 합니다.");
-            std::process::exit(1);
-        }
-        return;
-    };
-    let Some(output) = output else {
-        eprintln!("오류: --boundary를 사용할 때는 -o 출력 경로가 필요합니다.");
-        std::process::exit(1);
-    };
-    let draft = vec![
-        DraftBlock::SectionHeading("1. 기획 개요".into()),
-        DraftBlock::SubsectionHeading("1-1. 기획 배경 및 필요성".into()),
-        DraftBlock::Body("공연 현장의 안전 관리 체계를 데이터 기반으로 고도화한다.".into()),
-        DraftBlock::KeyPoint("공연 환경의 특수성을 반영한 통합 안전 관리".into()),
-        DraftBlock::Detail("암전, 연무와 고밀도 군중 환경을 함께 분석한다.".into()),
-    ];
-    let patched =
-        patch_template(core.document(), &selected, &profile, &draft).unwrap_or_else(|error| {
-            eprintln!("오류: 템플릿 패치를 적용할 수 없습니다: {error}");
-            std::process::exit(1);
-        });
-    core.set_document(patched);
-    let serialized = core.export_hwpx_native().unwrap_or_else(|error| {
-        eprintln!("오류: HWPX 직렬화에 실패했습니다: {error}");
-        std::process::exit(1);
-    });
-    rhwp::DocumentCore::from_bytes(&serialized).unwrap_or_else(|error| {
-        eprintln!("오류: 생성 HWPX 재로드에 실패했습니다: {error}");
-        std::process::exit(1);
-    });
-    if let Some(parent) = Path::new(&output).parent() {
-        fs::create_dir_all(parent).unwrap_or_else(|error| {
-            eprintln!("오류: 출력 디렉터리를 만들 수 없습니다: {error}");
-            std::process::exit(1);
-        });
-    }
-    fs::write(&output, serialized).unwrap_or_else(|error| {
-        eprintln!("오류: HWPX를 저장할 수 없습니다: {error}");
-        std::process::exit(1);
-    });
-    println!("HWPX 패치 및 재로드 성공: {output}");
-}
-
-fn validate_hwpx_input(input: &str) {
-    use std::io::Read;
-
-    if !Path::new(input)
-        .extension()
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("hwpx"))
-    {
-        eprintln!("오류: template-spike 입력은 .hwpx 확장자여야 합니다.");
-        std::process::exit(1);
-    }
-    let bytes = fs::read(input).unwrap_or_else(|error| {
-        eprintln!("오류: 템플릿을 읽을 수 없습니다: {error}");
-        std::process::exit(1);
-    });
-    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap_or_else(|_| {
-        eprintln!("오류: 입력 파일이 HWPX ZIP 형식이 아닙니다.");
-        std::process::exit(1);
-    });
-    let mut mimetype = String::new();
-    let valid_mimetype = archive
-        .by_name("mimetype")
-        .ok()
-        .is_some_and(|mut entry| entry.read_to_string(&mut mimetype).is_ok());
-    if !valid_mimetype || mimetype.trim() != "application/hwp+zip" {
-        eprintln!("오류: 입력 ZIP의 mimetype이 HWPX 형식이 아닙니다.");
-        std::process::exit(1);
-    }
-}
-
-fn parse_template_boundary(value: &str) -> Option<(usize, usize)> {
-    let (section, paragraph) = value.split_once(':')?;
-    Some((section.parse().ok()?, paragraph.parse().ok()?))
 }
 
 fn export_svg(args: &[String]) {
