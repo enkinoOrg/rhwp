@@ -2,7 +2,7 @@
 
 ## 목적
 
-Phase 2는 실제 Markdown 파일을 결정적으로 해석하여 Phase 1의 HWPX 템플릿 패처에 전달하고, 사람이 입력과 결과를 직접 비교할 수 있는 대표 검증 세트를 제공한다.
+Phase 2는 RHWP 본체와 분리된 독립 도구에서 실제 Markdown 파일을 결정적으로 해석하여 HWPX 템플릿에 적용하고, 사람이 입력과 결과를 직접 비교할 수 있는 대표 검증 세트를 제공한다.
 
 완료 기준은 Markdown 파싱 자체가 아니다. 커밋된 `input.md`와 `result.hwpx`를 나란히 열어보고, `comparison.md`에서 문단별 역할 판정과 템플릿 스타일 적용 근거를 확인할 수 있어야 한다.
 
@@ -17,6 +17,8 @@ Phase 2에 포함하는 범위는 다음과 같다.
 - 결과 HWPX 저장과 RHWP 재로드 검증
 - 대표 비교 자료 한 세트의 Git 보관
 - 실행별 비교 보고서 생성
+- Phase 1 변환기 코드를 독립 저장소로 이전
+- RHWP 본체에 추가했던 `template_compiler`와 `template-spike` 제거
 
 다음 항목은 Phase 2에서 구현하지 않는다.
 
@@ -25,6 +27,7 @@ Phase 2에 포함하는 범위는 다음과 같다.
 - 목표 페이지 수에 맞춘 자동 축약이나 확장
 - 실제 사업계획서 HWPX에 대한 범용 정확도 보장
 - RHWP Studio의 업로드·편집 UI
+- RHWP 파서·렌더러·편집 엔진의 기능 변경
 
 ## 아키텍처
 
@@ -35,21 +38,38 @@ input.md
   -> Markdown 블록 분리
   -> 번호·기호·문맥 기반 역할 추론
   -> DraftBlock 목록과 판정 근거
-  -> HWPX 템플릿 스타일 프로파일 분석
+  -> 고정된 RHWP 라이브러리 API로 HWPX 로드
+  -> 템플릿 스타일 프로파일 분석
   -> 보존 마지막 앵커와 교체 첫 앵커 확정
   -> Phase 1 패처로 문단 생성
   -> result.hwpx 저장과 RHWP 재로드
   -> comparison.md 생성
 ```
 
-구성 요소는 다음 책임으로 나눈다.
+변환기는 `/Users/mhj/enkinokorea/2026/md-to-hwpx`의 별도 Git 저장소로 관리한다. RHWP 저장소는 변환기 코드를 포함하지 않으며, 변환기 저장소가 검증된 RHWP Git 커밋을 Cargo 의존성으로 고정한다. 로컬 경로 의존성은 개발자의 파일 배치에 따라 결과가 달라지므로 기본 계약으로 사용하지 않는다.
+
+구성 요소는 독립 저장소에서 다음 책임으로 나눈다.
 
 - `markdown.rs`: Markdown을 블록으로 분리하고 역할·정규화 텍스트·판정 근거·경고를 생성한다.
 - `anchor.rs`: 보존 마지막 문단과 교체 첫 문단을 별도 좌표로 표현하고 유효성을 검사한다.
-- 기존 `patch.rs`: 분석된 블록에 템플릿 스타일을 적용해 문단을 생성한다.
+- `patch.rs`: 분석된 블록에 템플릿 스타일을 적용해 문단을 생성한다.
 - 비교 보고서 생성기: 입력과 결과의 해시, 역할 매핑, 보존 검증, 페이지 정보와 경고를 Markdown으로 기록한다.
 
 각 구성 요소는 순수하고 결정적인 입력·출력을 우선하며, 재시도나 라우팅 같은 결정적 처리를 AI 모델에 맡기지 않는다.
+
+## 저장소 경계와 Phase 1 이전
+
+RHWP는 HWPX를 읽고 쓰고 페이지를 계산하는 라이브러리로만 사용한다. 변환기 기능을 위해 RHWP의 `src`, `rhwp-studio`, 공개 API 또는 CLI를 변경하지 않는다.
+
+Phase 2의 첫 마이그레이션은 기존 Phase 1 구현의 소유권을 바로잡는다.
+
+1. RHWP의 `src/document_core/template_compiler` 구현과 관련 테스트를 독립 저장소로 옮긴다.
+2. RHWP `src/main.rs`의 `template-spike` 명령과 `src/document_core/mod.rs`의 변환기 공개를 제거한다.
+3. 독립 저장소가 RHWP의 공개 라이브러리 API만 사용하도록 import와 테스트를 변경한다.
+4. 같은 Phase 1 fixture로 이전 전후 결과의 의미 동등성을 검증한다.
+5. RHWP 전체 테스트와 production build로 원복이 기존 기능을 깨뜨리지 않았음을 확인한다.
+
+독립 도구 구현에 필요한 API가 RHWP에서 공개되지 않은 경우 RHWP를 즉시 수정하지 않는다. 필요한 API, 대안과 영향 범위를 문서화하고 사용자 승인을 받은 별도 RHWP 작업으로 분리한다.
 
 ## Markdown 역할 추론
 
@@ -103,16 +123,16 @@ Phase 1의 단일 시작 좌표를 다음 두 의미로 분리한다.
 대표 비교 세트는 다음 경로에 한 세트만 Git으로 관리한다.
 
 ```text
-samples/template-compiler/phase2/
+samples/phase2/
 ├── input.md
 ├── template.hwpx
 ├── result.hwpx
 └── comparison.md
 ```
 
-대표 템플릿은 검증된 `samples/rowbreak-problem-pages.hwpx`를 사용한다. 기능 안정화 뒤 사용자가 제공하는 사업계획서 HWPX로 별도 실문서 검증을 수행한다. 현재 제공된 `.hwp` 파일은 Phase 2 대표 입력으로 사용하지 않는다.
+대표 템플릿의 원본은 RHWP 저장소의 검증된 `samples/rowbreak-problem-pages.hwpx`다. 독립 저장소에 대표 fixture로 한 번 복사하고 출처 RHWP 커밋과 원본 SHA-256을 비교 문서에 기록한다. 기능 안정화 뒤 사용자가 제공하는 사업계획서 HWPX로 별도 실문서 검증을 수행한다. 현재 제공된 `.hwp` 파일은 Phase 2 대표 입력으로 사용하지 않는다.
 
-대표 세트 외 실행 결과는 `output/template-compiler/` 아래에 생성하고 Git에서 제외한다.
+대표 세트 외 실행 결과는 독립 저장소의 `output/` 아래에 생성하고 Git에서 제외한다.
 
 `comparison.md`는 다음 정보를 포함한다.
 
@@ -137,19 +157,19 @@ Markdown-HWPX 변환 동작을 변경하는 이후 각 마이그레이션은 사
 - 결과 파일 변경이 의도된 경우 비교 문서에 바뀐 규칙과 예상 차이를 기록한다.
 - 그 밖의 생성 결과는 재현 명령만 남기고 Git에는 보관하지 않는다.
 
-## CLI 계약
+## 독립 CLI 계약
 
-Phase 2 CLI는 HWPX 템플릿, Markdown 입력, 두 앵커와 출력 경로를 받는다. 성공 시 HWPX와 비교 보고서를 함께 생성한다. 대표적인 형태는 다음과 같다.
+Phase 2 CLI의 실행 파일 이름은 `md-to-hwpx`다. RHWP 실행 파일에 하위 명령을 추가하지 않는다. 독립 CLI는 HWPX 템플릿, Markdown 입력, 두 앵커와 출력 경로를 받는다. 성공 시 HWPX와 비교 보고서를 함께 생성한다. 대표적인 형태는 다음과 같다.
 
 ```text
-rhwp template-compile <template.hwpx> <input.md> \
+md-to-hwpx compile <template.hwpx> <input.md> \
   --preserve-through <section>:<paragraph> \
   --replace-from <section>:<paragraph> \
   --output <result.hwpx> \
   --report <comparison.md>
 ```
 
-분석만 필요한 경우 출력 경로를 생략하고 역할 추론과 앵커 후보를 JSON으로 출력한다. 명시한 앵커는 추천 후보와 달라도 허용하지만 보고서에 사용자 선택임을 기록한다.
+분석만 필요한 경우 `md-to-hwpx analyze <template.hwpx> <input.md>`를 사용하고 역할 추론과 앵커 후보를 JSON으로 출력한다. 명시한 앵커는 추천 후보와 달라도 허용하지만 보고서에 사용자 선택임을 기록한다.
 
 ## 검증
 
@@ -164,9 +184,12 @@ rhwp template-compile <template.hwpx> <input.md> \
 - 대표 비교 세트 네 파일이 존재하고 해시와 경로가 서로 대응한다.
 - 테스트에서 다시 생성한 결과가 커밋된 대표 HWPX와 의미적으로 동일하다.
 - 보존 영역, BinData, passthrough 엔트리와 전역 리소스가 기존 계약을 만족한다.
+- 독립 저장소가 고정된 RHWP Git 커밋만으로 빌드되고 테스트된다.
+- RHWP 저장소에 변환기 모듈, 변환기 CLI와 변환기 통합 테스트가 남아 있지 않다.
+- Phase 1 이전 전후 대표 결과가 의미적으로 동일하다.
 
-완료 전 프로젝트 운영 규칙에 따라 전체 Rust 테스트, `npm test`, production build와 운영 URL 응답을 검증하고 결과를 `docs/logs`에 기록한다.
+완료 전 독립 도구의 전체 테스트와 release build를 검증한다. RHWP 원복은 RHWP 프로젝트 운영 규칙에 따라 전체 Rust 테스트, `npm test`, production build와 운영 URL 응답을 검증한다. 양쪽 결과는 각 저장소의 작업 로그에 기록한다.
 
 ## 후속 실문서 검증
 
-Phase 2 공개 fixture 검증이 통과한 뒤 사용자가 사업계획서 원본을 HWPX로 저장해 제공하면 같은 CLI와 비교 보고서 형식으로 검증한다. 실문서 검증에서 발견한 스타일 역할, 앵커, 표·이미지 보존 문제는 Phase 2 결과에 섞어 임시 처리하지 않고 다음 마이그레이션의 입력으로 기록한다.
+Phase 2 공개 fixture 검증이 통과한 뒤 사용자가 사업계획서 원본을 HWPX로 저장해 제공하면 같은 독립 CLI와 비교 보고서 형식으로 검증한다. 실문서 검증에서 발견한 스타일 역할, 앵커, 표·이미지 보존 문제는 Phase 2 결과에 섞어 임시 처리하지 않고 다음 마이그레이션의 입력으로 기록한다.
