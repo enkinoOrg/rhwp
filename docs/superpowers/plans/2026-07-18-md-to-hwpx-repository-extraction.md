@@ -232,7 +232,7 @@ Expected: exit 0, 결과 재로드 성공 메시지와 분석 JSON 출력.
 
 - [ ] **Step 3: 비교 보고서 생성**
 
-`comparison.md`에 네 파일 경로·SHA-256, RHWP 출처 커밋, 경계 `1:36`, 다섯 역할의 style ID, 원본·결과 페이지 수, 보존 검증, 재로드 결과를 실제 실행값으로 기록한다. `input.md`는 Phase 1 고정 초안을 사람이 비교하기 위한 기준이며 이 마이그레이션 CLI가 아직 Markdown을 직접 읽지 않는다는 사실을 명시한다.
+`comparison.md`에 `input.md`, `template.hwpx`, `result.hwpx`의 경로·SHA-256, RHWP 출처 커밋, 경계 `1:36`, 다섯 역할의 style ID, 원본·결과 페이지 수, 보존 검증, 재로드 결과를 실제 실행값으로 기록한다. `comparison.md` 자체는 자기참조 SHA-256을 기록하지 않고 Git blob ID와 이를 포함한 커밋으로 버전을 식별한다고 명시한다. `input.md`는 Phase 1 고정 초안을 사람이 비교하기 위한 기준이며 이 마이그레이션 CLI가 아직 Markdown을 직접 읽지 않는다는 사실을 명시한다.
 
 - [ ] **Step 4: 대표 자료 대응 테스트 추가**
 
@@ -352,7 +352,7 @@ Expected: `200 text/html`.
 
 - [ ] **Step 5: 독립 저장소 로그와 커밋**
 
-로그에 최초 RHWP SHA, 원복 RHWP SHA, 이전 전후 테스트 집계, 대표 네 파일의 SHA-256과 알려진 제한을 기록한다.
+로그에 최초 RHWP SHA, 원복 RHWP SHA, 이전 전후 테스트 집계, 대표 입력·템플릿·결과 파일의 SHA-256, 비교 문서의 Git 식별 방식과 알려진 제한을 기록한다.
 
 ```bash
 rtk git add Cargo.toml Cargo.lock docs/logs/2026-07-18-phase1-repository-extraction.md
