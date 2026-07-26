@@ -791,6 +791,7 @@ async function restoreAutosaveDraft(draft: AutosaveDraft): Promise<void> {
  * - 상태 표시줄 메시지
  */
 function notifyHwpxSaveModeIfNeeded(): void {
+  if (window.parent !== window) return;
   if (wasm.getSourceFormat() !== 'hwpx') return;
 
   showToast({
