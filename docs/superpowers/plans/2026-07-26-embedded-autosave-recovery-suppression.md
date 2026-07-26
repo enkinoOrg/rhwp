@@ -145,10 +145,10 @@ rtk git commit -m "RHWP 임베드 초기 자동복구 창 억제"
 - [ ] **Step 1: Push the RHWP commits**
 
 ```bash
-rtk git push origin main
+rtk git push origin enkino/self-host
 ```
 
-Expected: the remote `main` contains the design, plan, and implementation commits.
+Expected: the deployed RHWP branch `origin/enkino/self-host` contains the design, plan, and implementation commits.
 
 - [ ] **Step 2: Deploy with the repository's existing RHWP deployment command**
 
