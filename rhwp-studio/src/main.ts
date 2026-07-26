@@ -743,7 +743,7 @@ async function loadBytes(
 
 function shouldSkipInitialAutosaveRecovery(): boolean {
   const params = new URLSearchParams(window.location.search);
-  return params.has('url');
+  return window.parent !== window || params.has('url');
 }
 
 async function offerAutosaveRecoveryIfIdle(): Promise<void> {
