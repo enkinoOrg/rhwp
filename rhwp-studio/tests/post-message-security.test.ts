@@ -49,6 +49,30 @@ function extractMessageHandlerSource(): string {
   return `globalThis.__handler = ${handlerExpression.getText(sourceFile)};`;
 }
 
+function extractDeclarationsSource(names: string[]): string {
+  const sourceText = readFileSync(join(studioDir, 'src/main.ts'), 'utf8');
+  const sourceFile = ts.createSourceFile(
+    'main.ts',
+    sourceText,
+    ts.ScriptTarget.ES2022,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const declarations = new Map<string, ts.FunctionDeclaration>();
+
+  for (const statement of sourceFile.statements) {
+    if (ts.isFunctionDeclaration(statement) && statement.name) {
+      declarations.set(statement.name.text, statement);
+    }
+  }
+
+  return names.map((name) => {
+    const declaration = declarations.get(name);
+    assert.ok(declaration, `main.ts의 ${name} 함수 선언을 찾을 수 있어야 한다`);
+    return declaration.getText(sourceFile);
+  }).join('\n');
+}
+
 function createStudioHarness(
   wasmOverrides: Record<string, unknown> = {},
   loadBytes: (bytes: Uint8Array) => Promise<void> = async () => {},
@@ -153,6 +177,142 @@ test('Studio는 transferred ArrayBuffer, Uint8Array와 legacy number[] loadFile 
   }
 
   assert.deepEqual(loaded.map(bytes => [...bytes]), [[11, 13], [17, 19], [23, 29]]);
+});
+
+test('embed loadFile의 suppressDialogs는 검증 모달을 기다리지 않고 로드를 완료한다', async () => {
+  const source = extractDeclarationsSource([
+    'applySavedTextMarkSettings',
+    'initializeDocument',
+    'loadBytes',
+    'handleRhwpMessage',
+  ]);
+  const transpiled = ts.transpileModule(
+    `${source}\nglobalThis.__handler = handleRhwpMessage;`,
+    {
+      compilerOptions: {
+        module: ts.ModuleKind.None,
+        target: ts.ScriptTarget.ES2022,
+      },
+    },
+  ).outputText;
+  let validationModalCalls = 0;
+  const replies: unknown[] = [];
+  const parentWindow = {
+    postMessage(message: unknown) {
+      replies.push(message);
+    },
+  };
+  const context = {
+    Uint8Array,
+    autosaveManager: {
+      beginDocument: async () => {},
+    },
+    canReplaceCurrentDocument: async () => true,
+    canvasView: { loadDocument() {} },
+    console,
+    documentState: {
+      markClean() {},
+      markDirty() {},
+    },
+    extensionViewerSettings: {},
+    initPromise: Promise.resolve(),
+    inputHandler: {
+      activateWithCaretPosition() {},
+      deactivate() {},
+    },
+    loadWebFonts: async () => {},
+    notifyHwpxSaveModeIfNeeded() {},
+    performance,
+    sbMessage: () => ({ textContent: '' }),
+    sbSection: () => ({ textContent: '' }),
+    showValidationModalIfNeeded: () => {
+      validationModalCalls += 1;
+      return new Promise(() => {});
+    },
+    syncTextMarkMenu() {},
+    toolbar: {
+      initFontDropdown() {},
+      initStyleDropdown() {},
+      setEnabled() {},
+    },
+    totalSections: 0,
+    userSettings: {
+      getViewSettings: () => ({
+        showControlCodes: false,
+        showParagraphMarks: false,
+      }),
+    },
+    wasm: {
+      currentFileHandle: null,
+      fileName: 'embedded.hwpx',
+      getSourceFormat: () => 'hwpx',
+      getValidationWarnings: () => ({ count: 1, summary: 'non-standard lineseg' }),
+      loadDocument: () => ({
+        fontsUsed: [],
+        pageCount: 1,
+        sectionCount: 1,
+      }),
+      pageCount: 1,
+      setShowControlCodes() {},
+      setShowParagraphMarks() {},
+    },
+    window: {
+      parent: parentWindow,
+    },
+  } as Record<string, unknown>;
+
+  runInNewContext(transpiled, context);
+  const handler = context.__handler as (event: {
+    data: unknown;
+    origin: string;
+    source: unknown;
+  }) => Promise<void>;
+  const outcome = await Promise.race([
+    handler({
+      data: {
+        type: 'rhwp-request',
+        id: 77,
+        method: 'loadFile',
+        params: {
+          data: new Uint8Array([1, 2, 3]),
+          fileName: 'embedded.hwpx',
+          suppressDialogs: true,
+        },
+      },
+      origin: 'https://host.example.test',
+      source: parentWindow,
+    }).then(() => 'completed'),
+    new Promise<string>((resolve) => setTimeout(() => resolve('timed-out'), 50)),
+  ]);
+
+  assert.equal(outcome, 'completed');
+  assert.equal(validationModalCalls, 0);
+  assert.equal(JSON.stringify(replies), JSON.stringify([{
+    type: 'rhwp-response',
+    id: 77,
+    result: { pageCount: 1 },
+  }]));
+
+  const truthyStringOutcome = await Promise.race([
+    handler({
+      data: {
+        type: 'rhwp-request',
+        id: 78,
+        method: 'loadFile',
+        params: {
+          data: new Uint8Array([4, 5, 6]),
+          fileName: 'embedded.hwpx',
+          suppressDialogs: 'true',
+        },
+      },
+      origin: 'https://host.example.test',
+      source: parentWindow,
+    }).then(() => 'completed'),
+    new Promise<string>((resolve) => setTimeout(() => resolve('timed-out'), 50)),
+  ]);
+
+  assert.equal(truthyStringOutcome, 'timed-out');
+  assert.equal(validationModalCalls, 1);
 });
 
 test('Studio는 큰 HWP/HWPX 결과를 standalone ArrayBuffer로 복사해 transfer한다', async () => {

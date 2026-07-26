@@ -630,7 +630,11 @@ function applySavedTextMarkSettings(): void {
   syncTextMarkMenu(view.showControlCodes, view.showParagraphMarks);
 }
 
-async function initializeDocument(docInfo: DocumentInfo, displayName: string): Promise<void> {
+async function initializeDocument(
+  docInfo: DocumentInfo,
+  displayName: string,
+  options: { suppressDialogs?: boolean } = {},
+): Promise<void> {
   const msg = sbMessage();
   let normalizedDuringLoad = false;
   try {
@@ -664,8 +668,10 @@ async function initializeDocument(docInfo: DocumentInfo, displayName: string): P
         const report = wasm.getValidationWarnings();
         console.log(`[validation] ${report.count} warnings`, report.summary);
         if (report.count > 0) {
-          const choice = await showValidationModalIfNeeded(report);
-          console.log(`[validation] user choice: ${choice}`);
+          const choice = options.suppressDialogs
+            ? 'as-is'
+            : await showValidationModalIfNeeded(report);
+          console.log(`[validation] user choice: ${choice}${options.suppressDialogs ? ' (dialogs suppressed)' : ''}`);
           if (choice === 'auto-fix') {
             const n = wasm.reflowLinesegs();
             console.log(`[validation] reflowed ${n} paragraphs`);
@@ -716,6 +722,7 @@ async function loadBytes(
   fileName: string,
   fileHandle: typeof wasm.currentFileHandle,
   startTime = performance.now(),
+  options: { suppressDialogs?: boolean } = {},
 ): Promise<void> {
   const docInfo = wasm.loadDocument(data, fileName);
   wasm.currentFileHandle = fileHandle;
@@ -726,7 +733,11 @@ async function loadBytes(
   const elapsed = performance.now() - startTime;
   // initializeDocument 안에서 #177 validation 모달이 표시될 수 있음.
   // HWPX 토스트는 모달과의 이벤트 충돌을 피하기 위해 모달 닫힌 후 표시.
-  await initializeDocument(docInfo, `${fileName} — ${docInfo.pageCount}페이지 (${elapsed.toFixed(1)}ms)`);
+  await initializeDocument(
+    docInfo,
+    `${fileName} — ${docInfo.pageCount}페이지 (${elapsed.toFixed(1)}ms)`,
+    { suppressDialogs: options.suppressDialogs },
+  );
   notifyHwpxSaveModeIfNeeded();
 }
 
@@ -1073,7 +1084,13 @@ async function handleRhwpMessage(e: MessageEvent): Promise<void> {
           break;
         }
         const bytes = new Uint8Array(params.data);
-        await loadBytes(bytes, params.fileName || 'document.hwp', null);
+        await loadBytes(
+          bytes,
+          params.fileName || 'document.hwp',
+          null,
+          undefined,
+          { suppressDialogs: params?.suppressDialogs === true },
+        );
         reply({ pageCount: wasm.pageCount });
         break;
       }
