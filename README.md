@@ -3,6 +3,7 @@
 > 이 저장소는 upstream RHWP를 기반으로 Enkino 프로젝트가 공용으로 사용하는 Studio를 배포한다.
 > 운영 주소는 `https://rhwp.enkinokorea.workers.dev`이며, 로컬 글꼴 감지 권한 안내 없이 대체 글꼴로 표시한다.
 > 외부 iframe 연동 SDK는 원본 `@rhwp/editor` npm package에 발행하지 않는다. Enkino 저장소의 검증된 transferable 바이너리 커밋 `9fc2bcbda1f5787c60b89244d01b4ff80e3adeab`을 자체 배포 기준으로 vendor해서 사용한다.
+> 임베드 `loadFile` 요청에서 HWPX 검증 대화상자를 생략하려면 정확한 boolean `suppressDialogs: true`를 전달한다. 이 옵션은 자동 보정하지 않고 문서를 그대로 열며, 사이트의 일반 파일 열기와 `?url=...` 열기에는 적용되지 않는다. 자세한 사용법은 [임베드 HWPX 검증 대화상자 억제](docs/tech/integration-guide.md#임베드-hwpx-검증-대화상자-억제)를 참고한다.
 > 자세한 내용은 [아키텍처](docs/tech/architecture.md), [외부 프로젝트 연동 가이드](docs/tech/integration-guide.md), [빌드 및 배포](docs/tech/deployment.md), [upstream 동기화](docs/tech/upstream-sync.md)를 참고한다.
 
 <p align="center">

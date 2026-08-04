@@ -50,6 +50,58 @@ session.destroy()
 
 컨테이너에는 안정적인 높이가 필요하다. 재진입 전과 화면 unmount 시 `session.destroy()`를 호출한다. 실제 `createRhwpDocumentSession`은 조회 또는 `editor.loadFile` 실패 시에도 `editor.destroy()`로 editor lifecycle을 정리하고, 저장 성공 응답의 version을 다음 저장 기준으로 갱신한다. 최소 예제의 조회·저장 callback, 오류 처리, lifecycle 설명은 [프레임워크 공통 README](../../examples/external-integration/README.md)에 있다.
 
+## 임베드 HWPX 검증 대화상자 억제
+
+HWPX에 비표준 `lineseg` 경고가 있으면 Studio는 기본적으로 사용자에게 자동 보정 여부를 묻는다. 부모 페이지가 `loadFile` 응답을 기다리는 iframe 연동에서는 이 대화상자가 RPC 제한 시간을 초과시킬 수 있다. 이 경우에만 `loadFile` 요청의 `params`에 정확한 boolean `suppressDialogs: true`를 전달한다.
+
+- `suppressDialogs === true`: 검증 대화상자를 생략하고 자동 보정 없이 문서를 그대로(`as-is`) 연다.
+- 옵션 누락, `false`, 문자열 `"true"`: 기존 대화형 검증을 유지한다.
+- `rhwp.enkinokorea.workers.dev`에서 사용자가 직접 파일을 열거나 `?url=...`로 여는 경우: 옵션이 전달되지 않으므로 경고 대화상자를 표시한다.
+- 이 옵션은 검증 경고 감지를 끄지 않는다. 사용자 입력을 기다리는 대화상자만 생략한다.
+
+현재 공개 `@rhwp/editor`의 `loadFile(data, fileName)`에는 세 번째 options 인자가 없다. Enkino 프로젝트는 SDK를 vendor한 뒤 다음처럼 최소 확장하거나, 아래의 직접 `postMessage` 방식을 사용한다.
+
+```ts
+export type LoadFileOptions = {
+  suppressDialogs?: boolean
+}
+
+async function loadFile(
+  data: ArrayBuffer | Uint8Array,
+  fileName = 'document.hwp',
+  options: LoadFileOptions = {},
+) {
+  const buffer = copyToTransferableBuffer(data)
+  return this._request('loadFile', {
+    data: buffer,
+    fileName,
+    suppressDialogs: options.suppressDialogs === true,
+  }, [buffer])
+}
+
+await editor.loadFile(bytes, fileName, { suppressDialogs: true })
+```
+
+`postMessage`를 직접 사용하는 경우 요청에는 필요한 필드만 명시한다. 호출자가 전달한 options 객체 전체를 펼치면 의도하지 않은 필드가 iframe 프로토콜로 넘어갈 수 있으므로 사용하지 않는다.
+
+```ts
+const RHWP_STUDIO_ORIGIN = 'https://rhwp.enkinokorea.workers.dev'
+const buffer = new Uint8Array(bytes).slice().buffer
+
+frame.contentWindow?.postMessage({
+  type: 'rhwp-request',
+  id: requestId,
+  method: 'loadFile',
+  params: {
+    data: buffer,
+    fileName,
+    suppressDialogs: true,
+  },
+}, RHWP_STUDIO_ORIGIN, [buffer])
+```
+
+응답은 `event.origin === RHWP_STUDIO_ORIGIN`과 `event.source === frame.contentWindow`를 모두 만족할 때만 처리한다. 운영 적용 시에는 Studio가 `suppressDialogs` 프로토콜을 지원하는 버전인지 먼저 확인한 다음 소비자 코드를 배포한다. 문제가 생기면 소비자의 옵션 전달을 제거하여 기존 대화형 검증으로 되돌린다.
+
 ## HTTP 계약
 
 `GET /api/documents/:documentId/file`과 `PUT /api/documents/:documentId/file`은 외부 프로젝트 서버의 계약이다. 응답 본문, 인증 방식, 권한 helper 이름은 서비스에 맞게 바꿀 수 있지만 상태 코드는 아래 의미를 유지한다.
