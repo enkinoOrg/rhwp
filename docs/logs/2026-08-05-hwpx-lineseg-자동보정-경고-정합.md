@@ -41,4 +41,16 @@ upstream `main`의 `2dced7bfe`에서도 선검증 후 자동 reflow 순서가 �
 
 ## 배포
 
-코드와 테스트를 구현·검증했으며 커밋, upstream PR, Worker 배포는 실행하지 않았다.
+- 소스 커밋: `9d60a14a650c` (`HWPX 자동보정 완료 경고 제거`)
+- 배포 일시: 2026-08-05 13:53 KST
+- Worker: `rhwp`
+- 운영 URL: `https://rhwp.enkinokorea.workers.dev`
+- Cloudflare Version ID: `6df7faca-3d5f-4087-a665-3a981ea5b7d7`
+- dry-run에서 정적 자산 84개를 확인했고, 변경 자산 5개를 업로드했다.
+- 운영 HTML이 `assets/index-CZ_7l2S-.js`를 참조하고, 해당 JS가
+  `rhwp_bg-HxGNGcR6.wasm`을 참조함을 확인했다.
+- 운영 WASM과 로컬 빌드의 SHA-256은 모두
+  `2c5cf9351f6a7a29624d6e55071586f994752189c17a07c26df22be8b4ac6fc6`로 일치했다.
+- 캐시 우회 운영 URL 요청은 HTTP 200, `text/html`을 반환했다.
+
+upstream PR은 사용자 승인 범위에 포함되지 않아 생성하지 않았다.
