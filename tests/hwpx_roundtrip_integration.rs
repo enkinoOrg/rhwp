@@ -437,6 +437,66 @@ fn count_validation_warnings(bytes: &[u8]) -> (usize, usize, usize, usize) {
     (report.len(), empty, uncomp, textrun)
 }
 
+/// 로드 중 자동 reflow가 해결한 빈 lineseg는 사용자 선택이 필요한 경고가 아니다.
+/// 이 경고가 남으면 Studio가 이미 보정된 문서에도 검증 모달을 반복 표시한다.
+#[test]
+fn load_reports_only_lineseg_warnings_remaining_after_automatic_reflow() {
+    use rhwp::document_core::DocumentCore;
+    use rhwp::model::document::{Document, Section};
+    use rhwp::model::paragraph::Paragraph;
+    use rhwp::serializer::hwpx::serialize_hwpx;
+
+    let mut document = Document::default();
+    let mut section = Section::default();
+    let mut paragraph = Paragraph::default();
+    paragraph.text = "자동 reflow 후에는 경고가 남지 않아야 한다".to_string();
+    section.paragraphs.push(paragraph);
+    document.sections.push(section);
+
+    let bytes = serialize_hwpx(&document).expect("HWPX 직렬화");
+    let loaded = DocumentCore::from_bytes(&bytes).expect("HWPX 로드");
+
+    assert!(
+        !loaded.document().sections[0].paragraphs[0]
+            .line_segs
+            .is_empty(),
+        "로드 과정이 빈 lineseg를 자동 reflow해야 한다"
+    );
+    assert!(
+        loaded.validation_report().is_empty(),
+        "자동 reflow로 해결된 경고가 사용자 모달 대상으로 남으면 안 된다: {:?}",
+        loaded.validation_report().warnings
+    );
+}
+
+/// HWP 계열은 기존 검증 보고서 의미를 유지한다. HWPX 모달 문제를 고치면서
+/// format 전체의 진단 계약까지 바꾸면 upstream 동기화 범위가 불필요하게 넓어진다.
+#[test]
+fn hwp_load_preserves_validation_report_from_before_automatic_reflow() {
+    use rhwp::document_core::validation::WarningKind;
+    use rhwp::document_core::DocumentCore;
+    use rhwp::model::document::{Document, Section};
+    use rhwp::model::paragraph::{LineSeg, Paragraph};
+    use rhwp::serialize_document;
+
+    let mut document = Document::default();
+    let mut section = Section::default();
+    let mut paragraph = Paragraph::default();
+    paragraph.text = "HWP 검증 계약 유지".to_string();
+    paragraph.line_segs.push(LineSeg::default());
+    section.paragraphs.push(paragraph);
+    document.sections.push(section);
+
+    let bytes = serialize_document(&document).expect("HWP 직렬화");
+    let loaded = DocumentCore::from_bytes(&bytes).expect("HWP 로드");
+
+    assert_eq!(loaded.validation_report().len(), 1);
+    assert_eq!(
+        loaded.validation_report().warnings[0].kind,
+        WarningKind::LinesegUncomputed
+    );
+}
+
 #[test]
 fn task177_hwpx_02_lineseg_histogram() {
     // hwpx-02 의 line_segs 분포를 관측한다.

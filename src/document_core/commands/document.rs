@@ -63,12 +63,11 @@ impl DocumentCore {
             document.is_hwp3_variant,
         );
 
-        // 비표준 lineseg 감지 — reflow 이전 시점에 IR을 그대로 검증.
-        // 경고는 사용자에게 고지되며, 자동 reflow 는 `needs_line_seg_reflow` 조건에만 한정.
-        // 사용자 명시 reflow 는 `reflow_linesegs_on_demand()` 를 통해서만 수행 (#177).
         // LinesegTextRunReflow는 HWPX 전용 비표준 패턴. HWP3/HWP5는 1 line_info = 1 lineseg가 정상.
+        // 자동 reflow 뒤에도 남은 경고만 사용자에게 고지한다.
+        // 추가 사용자 명시 reflow 는 `reflow_linesegs_on_demand()` 를 통해서만 수행 (#177).
         let check_textrun_reflow = matches!(source_format, crate::parser::FileFormat::Hwpx);
-        let validation_report = Self::validate_linesegs(&document, check_textrun_reflow);
+        let mut validation_report = Self::validate_linesegs(&document, check_textrun_reflow);
 
         // lineSegArray가 없는 문단에 대해 합성 LineSeg 생성.
         // HWPX 파서는 linesegarray 부재 문단의 line_segs 를 빈 채 보존하므로(#1380)
@@ -77,6 +76,12 @@ impl DocumentCore {
         // HWP5/HWP3 의 빈 line_segs 는 종전대로 reflow 하지 않는다 (페이지 수 보존).
         let include_empty = matches!(source_format, crate::parser::FileFormat::Hwpx);
         Self::reflow_zero_height_paragraphs(&mut document, &styles, DEFAULT_DPI, include_empty);
+
+        // HWPX는 로드 중 자동 reflow로 해결되지 않은 현재 상태만 사용자 선택 대상으로
+        // 기록한다. HWP/HWP3의 기존 선검증 보고서 계약은 그대로 유지한다.
+        if matches!(source_format, crate::parser::FileFormat::Hwpx) {
+            validation_report = Self::validate_linesegs(&document, check_textrun_reflow);
+        }
 
         // HWPX → HWP 라운드트립 일관성 normalize (#314):
         // HWPX 파서가 채우지 않는 paragraph 필드를 HWP 직렬화/파싱 라운드트립 결과와 일치시킨다.
