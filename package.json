@@ -1,0 +1,17 @@
+{
+  "name": "rhwp-monorepo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:wasm": "wasm-pack build --target web --release",
+    "studio:ci": "npm --prefix rhwp-studio ci",
+    "studio:build": "npm --prefix rhwp-studio run build",
+    "studio:test": "npm --prefix rhwp-studio test",
+    "build": "wasm-pack build --target web --release && npm --prefix rhwp-studio run build",
+    "test": "npm --prefix rhwp-studio test",
+    "deploy:dry-run": "wrangler deploy --dry-run"
+  },
+  "devDependencies": {
+    "wrangler": "4.110.0"
+  }
+}
