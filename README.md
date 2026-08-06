@@ -187,6 +187,9 @@ document.getElementById('viewer').innerHTML = doc.renderPageSvg(0);
 | [@rhwp/editor](https://www.npmjs.com/package/@rhwp/editor) | 완전한 에디터 UI (iframe) | `npm i @rhwp/editor` |
 | [@rhwp/core](https://www.npmjs.com/package/@rhwp/core) | WASM 파서/렌더러 (API) | `npm i @rhwp/core` |
 
+> 상세한 Enkino 연동 프로토콜, Cloudflare Workers `studioUrl` 설정, `suppressDialogs` 옵션 가이드는 [Enkino 연동 가이드](docs/tech/integration-guide.md)를 참고하세요. Enkino 아키텍처 및 배포/동기화 절차는 [docs/tech/architecture.md](docs/tech/architecture.md), [docs/tech/deployment.md](docs/tech/deployment.md), [docs/tech/upstream-sync.md](docs/tech/upstream-sync.md)에 정리되어 있습니다.
+
+
 ## Quick Start (소스 빌드)
 
 처음 프로젝트에 참여하는 개발자는 [온보딩 가이드](mydocs/manual/onboarding_guide.md)를 먼저 읽어보세요. 프로젝트 아키텍처, 디버깅 도구, 개발 워크플로우를 한눈에 파악할 수 있습니다.
