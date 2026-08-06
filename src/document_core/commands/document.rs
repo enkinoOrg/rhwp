@@ -185,7 +185,7 @@ impl DocumentCore {
         let check_textrun_reflow = matches!(source_format, crate::parser::FileFormat::Hwpx)
             && !hwp5_origin_hwpx
             && !document.layout_profile().hwp3_native_layout();
-        let validation_report = Self::validate_linesegs(&document, check_textrun_reflow);
+        let mut validation_report = Self::validate_linesegs(&document, check_textrun_reflow);
 
         // lineSegArray가 없는 문단에 대해 합성 LineSeg 생성.
         // XML 파서는 linesegarray 부재 문단의 line_segs 를 빈 채 보존하므로(#1380)
@@ -210,6 +210,10 @@ impl DocumentCore {
             include_cell_empty,
         );
         Self::clear_missing_lineseg_placeholders(&mut document);
+
+        if matches!(source_format, crate::parser::FileFormat::Hwpx) && !hwp5_origin_hwpx {
+            validation_report = Self::validate_linesegs(&document, check_textrun_reflow);
+        }
 
         // XML import → HWP 라운드트립 일관성 normalize (#314):
         // XML 파서가 채우지 않는 paragraph 필드를 HWP 직렬화/파싱 라운드트립 결과와 일치시킨다.

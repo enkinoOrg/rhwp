@@ -813,3 +813,70 @@ fn auto_num_preserved_on_roundtrip() {
     let d2 = parse_hwpx(&out).expect("reparse");
     assert_eq!(auto_nums(&d2), an1, "AutoNumber 컨트롤/값 보존 실패");
 }
+
+#[test]
+fn load_reports_only_lineseg_warnings_remaining_after_automatic_reflow() {
+    use rhwp::document_core::DocumentCore;
+    use rhwp::serializer::hwpx::serialize_hwpx;
+
+    let bytes = include_bytes!("../samples/hwpx/blank_hwpx.hwpx");
+    let mut doc_core = DocumentCore::from_bytes(bytes).expect("load blank_hwpx");
+    let doc = doc_core.document_mut();
+
+    let para = &mut doc.sections[0].paragraphs[0];
+    para.text = "자동 보정 대상 문단".to_string();
+    para.line_segs.clear();
+
+    let serialized = serialize_hwpx(doc).expect("serialize hwpx");
+    let reloaded = DocumentCore::from_bytes(&serialized).expect("reload hwpx");
+
+    assert!(
+        !reloaded.document().sections[0].paragraphs[0]
+            .line_segs
+            .is_empty(),
+        "lineseg가 합성되어 있어야 함"
+    );
+
+    assert!(
+        reloaded.validation_report().is_empty(),
+        "자동 보정 후 validation report는 잔여 경고만 유지해야 하므로 비어있어야 함, got: {:?}",
+        reloaded.validation_report()
+    );
+}
+
+#[test]
+fn hwp_load_preserves_validation_report_from_before_automatic_reflow() {
+    use rhwp::document_core::validation::WarningKind;
+    use rhwp::document_core::DocumentCore;
+    use rhwp::model::paragraph::LineSeg;
+    use rhwp::serializer::cfb_writer::serialize_hwp;
+
+    let bytes = include_bytes!("../samples/hwpx/blank_hwpx.hwpx");
+    let mut doc_core = DocumentCore::from_bytes(bytes).expect("load blank_hwpx");
+    let doc = doc_core.document_mut();
+
+    let para = &mut doc.sections[0].paragraphs[0];
+    para.text = "HWP zero height line seg".to_string();
+    para.line_segs = vec![LineSeg {
+        text_start: 0,
+        vertical_pos: 0,
+        line_height: 0,
+        text_height: 1000,
+        baseline_distance: 800,
+        line_spacing: 600,
+        column_start: 0,
+        segment_width: 1000,
+        tag: 0,
+    }];
+
+    let serialized_hwp = serialize_hwp(doc).expect("serialize hwp");
+    let reloaded_hwp = DocumentCore::from_bytes(&serialized_hwp).expect("reload hwp");
+
+    let warnings = &reloaded_hwp.validation_report().warnings;
+    assert_eq!(warnings.len(), 1, "HWP는 1개의 경고를 유지해야 함");
+    assert_eq!(
+        warnings[0].kind,
+        WarningKind::LinesegUncomputed,
+        "HWP는 LinesegUncomputed 경고를 보존해야 함"
+    );
+}
