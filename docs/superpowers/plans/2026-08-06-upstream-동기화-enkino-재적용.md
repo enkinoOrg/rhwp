@@ -181,44 +181,43 @@ rtk git commit -m "임베드 대화상자 억제를 명시 옵션으로 제한"
 
 **Files:**
 - Modify: `rhwp-studio/src/main.ts`
-- Modify: `rhwp-studio/tests/document-initialization-order.test.ts`
+- Create: `rhwp-studio/src/core/load-dialog-policy.ts`
+- Create: `rhwp-studio/src/core/initial-autosave-policy.ts`
 - Create: `rhwp-studio/tests/enkino-load-policy.test.ts`
 - Create: `rhwp-studio/tests/autosave-recovery-policy.test.ts`
 - Verify: `rhwp-studio/src/embed/rpc-router.ts`
 - Verify: `rhwp-studio/tests/embed-protocol.test.ts`
 
 **Interfaces:**
-- Consumes: `initializeDocument(docInfo, displayName, { suppressDialogs })`, `wasm.getValidationWarnings()`, `showValidationModalIfNeeded`, `shouldSkipInitialAutosaveRecovery()`
-- Produces: interactive residual-warning modal, no automatic local-font prompt, embedded autosave skip
+- Consumes: `initializeDocument(docInfo, displayName, { suppressDialogs })`, `wasm.getValidationWarnings()`, `showValidationModalIfNeeded`
+- Produces: `validationDialogAction(sourceFormat, warningCount, suppressDialogs): 'none' | 'prompt'`, `shouldSkipInitialAutosaveRecovery(search, embedded): boolean`, interactive residual-warning modal, no automatic local-font prompt
 
-- [ ] **Step 1: Write RED tests for initialization policy**
+- [ ] **Step 1: Write RED tests for load-dialog policy and initialization behavior**
 
-Update `document-initialization-order.test.ts` to assert the `initializeDocument` slice does not contain:
-
-```ts
-assert.doesNotMatch(initializeDocument, /await promptLocalFontsIfNeeded\(/);
-```
-
-Create `enkino-load-policy.test.ts` using the repository's TypeScript AST/source-test convention. Extract `initializeDocument` and assert it contains all of:
+Create `enkino-load-policy.test.ts`. Import the wished-for real policy function and assert literal outcomes:
 
 ```ts
-/await showValidationModalIfNeeded\(report\)/
-/options\.suppressDialogs === true/
-/wasm\.reflowLinesegs\(\)/
-/documentState\.markDirty\('validation-auto-fix'\)/
+assert.equal(validationDialogAction('hwpx', 1, false), 'prompt');
+assert.equal(validationDialogAction('hwpx', 1, true), 'none');
+assert.equal(validationDialogAction('hwpx', 0, false), 'none');
+assert.equal(validationDialogAction('hwp', 1, false), 'none');
 ```
 
-and does not contain the upstream global-as-is marker:
+The production mutation this catches is global warning suppression or a non-HWPX modal. The test initially fails because `src/core/load-dialog-policy.ts` does not exist.
 
-```ts
-/warnings — 그대로 보기 \(#2527\)/
-```
+In the same file, execute `initializeDocument` through a focused TypeScript VM harness with real policy logic and dependency fakes. Assert: prompt action calls `showValidationModalIfNeeded` once; suppress action calls it zero times; choosing `auto-fix` calls `reflowLinesegs`, reloads the canvas, and marks `validation-auto-fix`; neither path calls the local-font permission prompt. Fakes mirror `DocumentInfo`, validation report, canvas, document state, input, toolbar, and progress dependencies used by the real function.
 
 - [ ] **Step 2: Write RED tests for autosave and removed save notice**
 
-Port the pure AST harness from `enkino/self-host:rhwp-studio/tests/autosave-recovery-policy.test.ts`. It must assert top-level false, `?url=` true, and iframe true for `shouldSkipInitialAutosaveRecovery()`.
+Create `autosave-recovery-policy.test.ts` importing `shouldSkipInitialAutosaveRecovery` from the wished-for `src/core/initial-autosave-policy.ts`. Pass explicit values rather than reading global window state:
 
-In `enkino-load-policy.test.ts`, add a characterization assertion that upstream `main.ts` has no `notifyHwpxSaveModeIfNeeded` identifier. This assertion passes before production changes and guards against accidental resurrection; it is not used as RED evidence.
+```ts
+assert.equal(shouldSkipInitialAutosaveRecovery('', false), false);
+assert.equal(shouldSkipInitialAutosaveRecovery('?url=%2Fsamples%2Fsample.hwp', false), true);
+assert.equal(shouldSkipInitialAutosaveRecovery('', true), true);
+```
+
+Do not add a source-presence test for the already removed HWPX save notice. No production code should resurrect that notice.
 
 - [ ] **Step 3: Verify RED and baseline characterization**
 
@@ -226,19 +225,41 @@ In `enkino-load-policy.test.ts`, add a characterization assertion that upstream 
 rtk proxy node --test rhwp-studio/tests/document-initialization-order.test.ts rhwp-studio/tests/enkino-load-policy.test.ts rhwp-studio/tests/autosave-recovery-policy.test.ts
 ```
 
-Expected: FAIL because upstream still prompts local fonts, globally logs validation as-is, and skips autosave only for `?url=`. The removed-save-notice assertion passes.
+Expected: FAIL because both policy modules are absent. After the modules exist but before `main.ts` wiring, the initialization behavior assertions still fail because upstream globally opens as-is and prompts local fonts.
 
-- [ ] **Step 4: Restore the validation modal minimally**
+- [ ] **Step 4: Implement the pure policies and restore the validation modal minimally**
+
+Create `load-dialog-policy.ts`:
+
+```ts
+export type ValidationDialogAction = 'none' | 'prompt';
+
+export function validationDialogAction(
+  sourceFormat: string,
+  warningCount: number,
+  suppressDialogs: unknown,
+): ValidationDialogAction {
+  return sourceFormat === 'hwpx' && warningCount > 0 && suppressDialogs !== true
+    ? 'prompt'
+    : 'none';
+}
+```
+
+Create `initial-autosave-policy.ts`:
+
+```ts
+export function shouldSkipInitialAutosaveRecovery(search: string, embedded: boolean): boolean {
+  return new URLSearchParams(search).has('url') || embedded;
+}
+```
 
 Import `showValidationModalIfNeeded`. In the existing HWPX validation branch:
 
 ```ts
 let normalizedDuringLoad = false;
 const report = wasm.getValidationWarnings();
-if (report.count > 0) {
-  const choice = options.suppressDialogs === true
-    ? 'as-is'
-    : await showValidationModalIfNeeded(report);
+if (validationDialogAction(docInfo.sourceFormat, report.count, options.suppressDialogs) === 'prompt') {
+  const choice = await showValidationModalIfNeeded(report);
   if (choice === 'auto-fix') {
     const normalized = wasm.reflowLinesegs();
     if (normalized > 0) {
@@ -262,19 +283,25 @@ Remove only the call `await promptLocalFontsIfNeeded(docInfo, displayName)` from
 
 - [ ] **Step 6: Skip initial autosave recovery in iframe**
 
-Change the pure policy to:
+Import the pure policy under an explicit alias, then change the existing window-state wrapper to:
 
 ```ts
+import {
+  shouldSkipInitialAutosaveRecovery as shouldSkipInitialAutosaveRecoveryPolicy,
+} from './core/initial-autosave-policy';
+
 function shouldSkipInitialAutosaveRecovery(): boolean {
-  const params = new URLSearchParams(window.location.search);
-  return params.has('url') || window.parent !== window;
+  return shouldSkipInitialAutosaveRecoveryPolicy(
+    window.location.search,
+    window.parent !== window,
+  );
 }
 ```
 
 - [ ] **Step 7: Verify GREEN plus upstream protocol**
 
 ```bash
-rtk proxy node --test rhwp-studio/tests/document-initialization-order.test.ts rhwp-studio/tests/enkino-load-policy.test.ts rhwp-studio/tests/autosave-recovery-policy.test.ts rhwp-studio/tests/embed-protocol.test.ts
+rtk proxy node --test rhwp-studio/tests/enkino-load-policy.test.ts rhwp-studio/tests/autosave-recovery-policy.test.ts rhwp-studio/tests/embed-protocol.test.ts
 rtk proxy npm --prefix rhwp-studio test
 rtk git diff --check
 ```
@@ -284,7 +311,7 @@ Expected: targeted and all 641+ Studio tests pass; embed router still proves str
 - [ ] **Step 8: Commit**
 
 ```bash
-rtk git add rhwp-studio/src/main.ts rhwp-studio/tests/document-initialization-order.test.ts rhwp-studio/tests/enkino-load-policy.test.ts rhwp-studio/tests/autosave-recovery-policy.test.ts
+rtk git add rhwp-studio/src/main.ts rhwp-studio/src/core/load-dialog-policy.ts rhwp-studio/src/core/initial-autosave-policy.ts rhwp-studio/tests/enkino-load-policy.test.ts rhwp-studio/tests/autosave-recovery-policy.test.ts
 rtk git diff --cached --check
 rtk git commit -m "Studio 로드 대화상자 정책 복원"
 ```
