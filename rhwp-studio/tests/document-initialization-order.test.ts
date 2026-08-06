@@ -18,15 +18,13 @@ function initializeDocumentSource(): string {
   return main.slice(start, end);
 }
 
-test('문서 초기화는 로컬 글꼴 확인 후에만 입력 핸들러를 활성화한다', () => {
+test('문서 초기화는 자동 로컬 글꼴 팝업 없이 입력 핸들러를 활성화하고 완료한다', () => {
   const initializeDocument = initializeDocumentSource();
   const promptIndex = initializeDocument.indexOf('await promptLocalFontsIfNeeded(docInfo, displayName);');
   const activateIndex = initializeDocument.indexOf('inputHandler?.activateWithCaretPosition();');
-  const completeIndex = initializeDocument.indexOf("documentState.markClean('document-initialized');");
 
-  assert.ok(promptIndex >= 0, '로컬 글꼴 확인 단계가 있어야 한다');
-  assert.ok(activateIndex > promptIndex, '로컬 글꼴 확인 뒤에 캐럿을 활성화해야 한다');
-  assert.ok(completeIndex > activateIndex, '편집 준비 뒤에 문서 초기화를 완료해야 한다');
+  assert.equal(promptIndex, -1, '자동 로컬 글꼴 팝업 호출이 없어야 한다');
+  assert.ok(activateIndex >= 0, '캐럿을 활성화해야 한다');
   assert.doesNotMatch(
     initializeDocument,
     /updateLoadProgress\(100, '완료'\)/,

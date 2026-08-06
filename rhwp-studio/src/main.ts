@@ -30,6 +30,7 @@ import { forgetConvertedHmlSaveHandle } from '@/command/save-target';
 import { ContextMenu } from '@/ui/context-menu';
 import { CommandPalette } from '@/ui/command-palette';
 import { showHmlImportWarning } from '@/ui/hml-import-warning';
+import { showValidationModalIfNeeded } from '@/ui/validation-modal';
 import { showLocalFontsModalIfNeeded } from '@/ui/local-fonts-modal';
 import { showToast } from '@/ui/toast';
 import { addRecentDoc, listRecentDocs } from '@/recent/recent-store';
@@ -58,6 +59,10 @@ import {
 } from '@/view/render-backend';
 import { calculateFitPageZoom, calculateFitWidthZoom } from '@/view/zoom-fit';
 import { installEmbedRuntime } from '@/embed/runtime';
+import { validationDialogAction } from '@/core/load-dialog-policy';
+import {
+  shouldSkipInitialAutosaveRecovery as shouldSkipInitialAutosaveRecoveryPolicy,
+} from '@/core/initial-autosave-policy';
 import type { EmbedRendererRuntimeRequestV1 } from '@/embed/rpc-router';
 
 const wasm = new WasmBridge();
@@ -879,26 +884,27 @@ async function initializeDocument(
     console.log('[initDoc] 7. 사전 검증 및 로컬 글꼴 확인');
     await updateLoadProgress(94, '문서 검증 및 글꼴 확인 중...');
 
-    // #177: HWPX 비표준 lineseg 감지 (진단 로그).
-    // #2527: 자동 보정(reflowLinesegs)이 빈-lineseg 문서에서 글리프 좌표를 붕괴시켜
-    // 글자가 대량으로 겹치므로, 모달을 띄우지 않고 항상 '그대로 보기'로 연다.
-    // reflow 근본 수정 후 모달/자동 보정 재도입을 검토한다.
+    let normalizedDuringLoad = false;
     try {
-      if (wasm.getSourceFormat() === 'hwpx') {
+      const sourceFormat = wasm.getSourceFormat();
+      if (sourceFormat === 'hwpx') {
         const report = wasm.getValidationWarnings();
-        if (report.count > 0) {
-          console.log(`[validation] ${report.count} warnings — 그대로 보기 (#2527)`, report.summary);
+        if (validationDialogAction(sourceFormat, report.count, options.suppressDialogs) === 'prompt') {
+          const choice = await showValidationModalIfNeeded(report);
+          if (choice === 'auto-fix') {
+            const normalized = wasm.reflowLinesegs();
+            if (normalized > 0) {
+              await canvasView?.loadDocument();
+              normalizedDuringLoad = true;
+            }
+          }
         }
-      } else if (wasm.getSourceFormat() === 'hml') {
+      } else if (sourceFormat === 'hml') {
         const metadata = wasm.getHmlOpenMetadata();
         if (metadata) showHmlImportWarning(metadata);
       }
     } catch (e) {
       console.warn('[validation] 감지 실패 (치명적이지 않음):', e);
-    }
-
-    if (!options.suppressDialogs) {
-      await promptLocalFontsIfNeeded(docInfo, displayName);
     }
 
     // 로컬 글꼴 감지 결과가 뷰를 갱신한 뒤에 캐럿을 연결해야 입력 포커스가 재설정과 경합하지 않는다.
@@ -909,8 +915,11 @@ async function initializeDocument(
     msg.textContent = displayName;
     console.log('[initDoc] 9. 완료');
 
-    // #2527: 자동 보정을 하지 않으므로 로드 직후 문서는 항상 clean.
-    documentState.markClean('document-initialized');
+    if (normalizedDuringLoad) {
+      documentState.markDirty('validation-auto-fix');
+    } else {
+      documentState.markClean('document-initialized');
+    }
   } catch (error) {
     console.error('[initDoc] 오류:', error);
     if (window.innerWidth < 768) alert(`초기화 오류: ${error}`);
@@ -1091,8 +1100,10 @@ async function renderRecentSubmenu(): Promise<void> {
 }
 
 function shouldSkipInitialAutosaveRecovery(): boolean {
-  const params = new URLSearchParams(window.location.search);
-  return params.has('url');
+  return shouldSkipInitialAutosaveRecoveryPolicy(
+    window.location.search,
+    window.parent !== window,
+  );
 }
 
 async function offerAutosaveRecoveryIfIdle(): Promise<void> {
