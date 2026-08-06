@@ -17,13 +17,10 @@ test('loadFile sends the embed dialog default while preserving explicit choices'
   await editor.loadFile(data, 'omitted.hwp');
   await editor.loadFile(data, 'false.hwp', { suppressDialogs: false });
   await editor.loadFile(data, 'true.hwp', { suppressDialogs: true });
+  await editor.loadFile(data, 'string.hwp', { suppressDialogs: 'true' });
 
   assert.deepEqual(
-    requests.map(({ method, params }) => ({ method, suppressDialogs: params.suppressDialogs })),
-    [
-      { method: 'loadFile', suppressDialogs: true },
-      { method: 'loadFile', suppressDialogs: false },
-      { method: 'loadFile', suppressDialogs: true },
-    ],
+    requests.map(({ params }) => params.suppressDialogs),
+    [false, false, true, false],
   );
 });

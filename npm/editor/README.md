@@ -93,8 +93,8 @@ HWP 파일을 로드합니다.
 const result = await editor.loadFile(buffer, 'sample.hwp');
 // result = { pageCount: 5 }
 
-// 안내창에서 사용자가 직접 선택하도록 열기
-await editor.loadFile(buffer, 'sample.hwpx', { suppressDialogs: false });
+// 안내창(HWPX 검증, 로컬 글꼴 감지 등) 없이 열기
+await editor.loadFile(buffer, 'sample.hwpx', { suppressDialogs: true });
 ```
 
 **options:**
@@ -102,12 +102,9 @@ await editor.loadFile(buffer, 'sample.hwpx', { suppressDialogs: false });
 | 옵션 | 기본값 | 설명 |
 |------|--------|------|
 | `skipUnsavedGuard` | `false` | 미저장 변경 확인 없이 문서 교체 |
-| `suppressDialogs` | `true` | 로드 후 안내창(HWPX 검증, 로컬 글꼴 감지) 없이 열기 |
+| `suppressDialogs` | `false` | 로드 후 안내창(HWPX 검증, 로컬 글꼴 감지) 없이 열기 (`true` 명시 시 억제) |
 
-> `suppressDialogs`를 생략하면 검증 경고는 '그대로 열기'로 처리하고 글꼴은 웹 대체 글꼴로
-> 표시하여 `loadFile` 응답을 즉시 반환합니다. 안내창(HWPX 비표준 lineseg 검증, 로컬 글꼴
-> 감지)에서 사용자가 직접 선택해야 하는 대화형 흐름이 필요하면 `suppressDialogs: false`를
-> 명시하세요.
+> 기본적으로 `suppressDialogs`는 `false`이며 안내창 흐름을 유지합니다. 명시적 Enkino `studioUrl` 사용 환경 등에서 대화상자를 억제하고 즉시 열려면 `{ suppressDialogs: true }`를 명시하세요.
 
 ### editor.pageCount()
 
