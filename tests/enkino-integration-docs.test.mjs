@@ -24,4 +24,44 @@ test('Enkino integration documentation contract', () => {
 
   // Readme links to integration guide
   assert.match(readme, /docs\/tech\/integration-guide\.md/);
+
+  // Package.json script contract validation for deployment docs
+  const packageJson = JSON.parse(readFileSync(resolve(rootDir, 'package.json'), 'utf8'));
+  const npmRunMatches = [...deployment.matchAll(/npm run ([a-zA-Z0-9:-]+)/g)];
+  assert.ok(npmRunMatches.length > 0, 'deployment.md should contain npm run commands');
+  for (const match of npmRunMatches) {
+    const scriptName = match[1];
+    assert.ok(
+      Object.prototype.hasOwnProperty.call(packageJson.scripts, scriptName),
+      `deployment.md references non-existent script "npm run ${scriptName}"`
+    );
+  }
+  assert.doesNotMatch(deployment, /npm run build:studio/);
+
+  // Wrangler config contract validation for deployment docs
+  const wranglerContent = readFileSync(resolve(rootDir, 'wrangler.jsonc'), 'utf8');
+  const wranglerConfig = JSON.parse(
+    wranglerContent.replace(/\/\*[\s\S]*?\*\/|([^\\:]|^)\/\/.*$/gm, '$1')
+  );
+
+  assert.match(
+    deployment,
+    new RegExp(`"compatibility_date":\\s*"${wranglerConfig.compatibility_date}"`)
+  );
+  assert.match(
+    deployment,
+    new RegExp(`"not_found_handling":\\s*"${wranglerConfig.assets.not_found_handling}"`)
+  );
+  assert.match(
+    deployment,
+    new RegExp(`"html_handling":\\s*"${wranglerConfig.assets.html_handling}"`)
+  );
+  assert.match(
+    deployment,
+    new RegExp(`"directory":\\s*"${wranglerConfig.assets.directory.replace('./', '\\./')}"`)
+  );
+
+  if (!wranglerConfig.assets.binding) {
+    assert.doesNotMatch(deployment, /"binding":\s*"ASSETS"/);
+  }
 });

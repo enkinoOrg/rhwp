@@ -14,14 +14,16 @@ rhwp-studio는 Cloudflare Workers의 Static Asset Hosting 모드를 사용하여
 
 ```jsonc
 {
+  "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "rhwp",
-  "compatibility_date": "2026-08-06",
+  "compatibility_date": "2026-07-13",
+  "compatibility_flags": ["nodejs_compat"],
   "assets": {
     "directory": "./rhwp-studio/dist",
-    "binding": "ASSETS",
-    "html_handling": "single-page",
-    "not_found_handling": "single-page"
-  }
+    "not_found_handling": "single-page-application",
+    "html_handling": "auto-trailing-slash"
+  },
+  "observability": { "enabled": true, "head_sampling_rate": 1 }
 }
 ```
 
@@ -30,9 +32,9 @@ rhwp-studio는 Cloudflare Workers의 Static Asset Hosting 모드를 사용하여
 ### 2.1 정적 자산 빌드
 
 ```bash
-npm run build:studio
+npm run studio:build
 ```
-위 명령은 WASM 모듈(`pkg/`) 생성 확인 후 `rhwp-studio`의 Vite 프로덕션 빌드를 수행하여 `./rhwp-studio/dist` 디렉토리에 정적 파일들을 생성합니다.
+위 명령은 `rhwp-studio`의 Vite 프로덕션 빌드를 수행하여 `./rhwp-studio/dist` 디렉토리에 정적 파일들을 생성합니다. WASM 빌드를 함께 수행해야 하는 경우 `npm run build`를 사용할 수 있습니다.
 
 ### 2.2 드라이 런 검증 (Dry-Run Check)
 
