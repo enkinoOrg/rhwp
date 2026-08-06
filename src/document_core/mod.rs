@@ -370,9 +370,8 @@ impl DocumentCore {
 
     /// 문서 검증 리포트에 대한 참조를 반환한다.
     ///
-    /// `from_bytes` 시점에 HWPX 비표준 lineseg 감지가 수행되며, 경고가 있으면
-    /// 사용자에게 고지되어야 한다. 자동 reflow 는 적용되지 않고 사용자가
-    /// 명시적으로 `reflow_linesegs_on_demand()` 를 호출해야 보정된다.
+    /// `from_bytes` 시점에 비표준 lineseg 감지가 수행되며, 일반 HWPX는
+    /// 자동 보정(reflow) 후 잔여 경고만 유지된다.
     pub fn validation_report(&self) -> &validation::ValidationReport {
         &self.validation_report
     }
