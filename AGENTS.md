@@ -23,3 +23,14 @@
 - Worker 이름: `rhwp`
 - 운영 URL: `https://rhwp.enkinokorea.workers.dev`
 - 정적 산출물: `rhwp-studio/dist`
+
+## Token Budgets
+
+Token budgets are not advisory.
+
+- Per task: 20,000 tokens.
+- Per session: 100,000 tokens.
+- When approaching a limit, checkpoint completed work and report what remains.
+- Surface any breach; do not silently overrun.
+
+
