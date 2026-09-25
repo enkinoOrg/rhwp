@@ -87,8 +87,11 @@ pub enum ChunkKind {
 /// 청크에 실린 표 하나의 **메타데이터**(문서 텍스트는 담지 않는다 — 본문은 `text` 에 있다).
 #[derive(Debug, Clone, Serialize)]
 pub struct ChunkTableRef {
-    /// `export-tables` 의 문서 내 표 순번(0부터).
+    /// `export-tables` 의 문서 내 표 순번(0부터). 중첩 표는 셀의 `nested` 목록 순번이다.
     pub index: usize,
+    /// 중첩 표의 계층 라벨. 최상위 표에는 직렬화하지 않는다.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     /// 표가 놓인 구역 인덱스.
     pub section: usize,
     /// 표를 담은 문단 인덱스 — 역참조·인용용 주소.
@@ -249,16 +252,79 @@ fn sanitize_cell(text: &str) -> String {
         .to_string()
 }
 
+/// 각 셀의 중첩 표에 부모 기준 라벨을 붙인다 — 셀 읽기 순서(행→열) 기준.
+fn nested_table_labels<'a>(
+    grid: &'a TableGrid,
+    parent_label: &str,
+) -> (Vec<Vec<String>>, Vec<(String, &'a TableGrid)>) {
+    let mut labels_by_cell = vec![Vec::new(); grid.cells.len()];
+    let mut cell_order: Vec<usize> = (0..grid.cells.len()).collect();
+    cell_order.sort_by_key(|&index| (grid.cells[index].row, grid.cells[index].col));
+
+    let mut children = Vec::new();
+    for cell_index in cell_order {
+        for nested in &grid.cells[cell_index].nested {
+            let label = format!("{parent_label}-{}", children.len() + 1);
+            labels_by_cell[cell_index].push(label.clone());
+            children.push((label, nested));
+        }
+    }
+    (labels_by_cell, children)
+}
+
+/// 셀 안의 중첩 표 위치를 셀 텍스트 끝에 표시한다.
+fn append_table_references(text: &mut String, labels: &[String]) {
+    if labels.is_empty() {
+        return;
+    }
+    if !text.is_empty() {
+        text.push(' ');
+    }
+    text.push_str("[표 ");
+    text.push_str(&labels.join(", "));
+    text.push_str(" 참조]");
+}
+
 /// 표 하나를 Markdown 텍스트 파트들로 선형화한다.
 ///
 /// - 머리 행을 보존하고, 병합 셀은 앵커 칸에 `[병합 R×C]` 로 주석한다(덮인 칸은 빈 칸).
 /// - 예산을 넘는 큰 표는 **행 단위로만** 쪼개고(절대 행 중간을 자르지 않는다) 파트마다
 ///   머리 행을 되풀이한다.
 ///
-/// 반환: `(파트 텍스트, 표 메타, 토큰 추정)` 목록. 항상 최소 1개.
+/// 반환은 표별 `(파트 텍스트, 표 메타, 토큰 추정)` 목록이다. 바깥 표 다음에
+/// 중첩 표를 셀 읽기 순서로 깊이 우선 출력한다.
 fn linearize_table_parts(
     grid: &TableGrid,
     max_tokens: usize,
+    label: &str,
+    nested: bool,
+) -> Vec<Vec<(String, ChunkTableRef, usize)>> {
+    let (nested_labels, child_tables) = nested_table_labels(grid, label);
+    let mut tables = vec![linearize_one_table_parts(
+        grid,
+        max_tokens,
+        label,
+        nested,
+        &nested_labels,
+    )];
+    for (child_label, child_grid) in child_tables {
+        tables.extend(linearize_table_parts(
+            child_grid,
+            max_tokens,
+            &child_label,
+            true,
+        ));
+    }
+    tables
+}
+
+/// 한 표만 Markdown 텍스트 파트들로 선형화한다.
+fn linearize_one_table_parts(
+    grid: &TableGrid,
+    max_tokens: usize,
+    label: &str,
+    nested: bool,
+    nested_labels: &[Vec<String>],
 ) -> Vec<(String, ChunkTableRef, usize)> {
     let rows = grid.rows as usize;
     let cols = grid.cols as usize;
@@ -271,16 +337,16 @@ fn linearize_table_parts(
     // 폴백 — 격자가 비었거나 병적으로 크면 앵커 셀만 나열한다(행 단위 원자, 미분할).
     if rows == 0 || cols == 0 || rows.saturating_mul(cols) > DENSE_GRID_CELL_CAP {
         let mut lines = Vec::new();
+        if nested {
+            lines.push(format!("[표 {label}]"));
+        }
         if let Some(cap) = &caption {
             lines.push(format!("[표] {cap}"));
         }
-        for cell in &grid.cells {
-            lines.push(format!(
-                "({}, {}) {}",
-                cell.row,
-                cell.col,
-                sanitize_cell(&cell.text)
-            ));
+        for (cell_index, cell) in grid.cells.iter().enumerate() {
+            let mut text = sanitize_cell(&cell.text);
+            append_table_references(&mut text, &nested_labels[cell_index]);
+            lines.push(format!("({}, {}) {}", cell.row, cell.col, text));
         }
         let text = lines.join("\n");
         let tokens = estimate_tokens(&text);
@@ -288,6 +354,7 @@ fn linearize_table_parts(
             text,
             ChunkTableRef {
                 index: grid.index,
+                label: nested.then(|| label.to_string()),
                 section: grid.section,
                 paragraph: grid.paragraph,
                 rows: grid.rows,
@@ -304,7 +371,7 @@ fn linearize_table_parts(
     // 조밀 격자로 펼친다 — 병합 앵커 텍스트를 제자리에, 덮인 칸은 빈 문자열.
     let mut dense = vec![vec![String::new(); cols]; rows];
     let mut header_flags = vec![false; rows];
-    for cell in &grid.cells {
+    for (cell_index, cell) in grid.cells.iter().enumerate() {
         let r = cell.row as usize;
         let c = cell.col as usize;
         if r >= rows || c >= cols {
@@ -317,6 +384,7 @@ fn linearize_table_parts(
             }
             text.push_str(&format!("[병합 {}×{}]", cell.row_span, cell.col_span));
         }
+        append_table_references(&mut text, &nested_labels[cell_index]);
         dense[r][c] = text;
         if cell.is_header {
             let end = (r + cell.row_span as usize).min(rows);
@@ -340,6 +408,9 @@ fn linearize_table_parts(
 
     let separator = format!("| {} |", vec!["---"; cols].join(" | "));
     let mut header_block: Vec<String> = Vec::new();
+    if nested {
+        header_block.push(format!("[표 {label}]"));
+    }
     if let Some(cap) = &caption {
         header_block.push(format!("[표] {cap}"));
     }
@@ -380,6 +451,7 @@ fn linearize_table_parts(
                 text,
                 ChunkTableRef {
                     index: grid.index,
+                    label: nested.then(|| label.to_string()),
                     section: grid.section,
                     paragraph: grid.paragraph,
                     rows: grid.rows,
@@ -501,20 +573,23 @@ fn emit_segment(seg: &Segment, tables: &[TableGrid], max_tokens: usize, out: &mu
     let mut table_indices = seg.tables.clone();
     table_indices.sort_unstable();
     for table_index in table_indices {
-        let parts = linearize_table_parts(&tables[table_index], max_tokens);
-        if parts.len() == 1 {
-            let (text, table_ref, tokens) = parts.into_iter().next().expect("one part");
-            if !buf.is_empty() && buf.tokens + tokens > max_tokens {
+        let grid = &tables[table_index];
+        let label = (grid.index + 1).to_string();
+        for parts in linearize_table_parts(grid, max_tokens, &label, false) {
+            if parts.len() == 1 {
+                let (text, table_ref, tokens) = parts.into_iter().next().expect("one part");
+                if !buf.is_empty() && buf.tokens + tokens > max_tokens {
+                    buf.flush(out);
+                }
+                buf.push_table(text, table_ref, tokens);
+            } else {
+                // 여러 파트로 쪼개진 큰 표는 각 파트가 독립 청크다.
                 buf.flush(out);
-            }
-            buf.push_table(text, table_ref, tokens);
-        } else {
-            // 여러 파트로 쪼개진 큰 표는 각 파트가 독립 청크다.
-            buf.flush(out);
-            for (text, table_ref, tokens) in parts {
-                let mut standalone = ChunkBuf::new(seg);
-                standalone.push_table(text, table_ref, tokens);
-                standalone.flush(out);
+                for (text, table_ref, tokens) in parts {
+                    let mut standalone = ChunkBuf::new(seg);
+                    standalone.push_table(text, table_ref, tokens);
+                    standalone.flush(out);
+                }
             }
         }
     }
@@ -772,6 +847,185 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn non_nested_table_markdown_keeps_its_previous_bytes() {
+        let doc = doc_with(vec![para_with_table(
+            2,
+            2,
+            vec![
+                cell(0, 0, "이름", true),
+                cell(0, 1, "값", true),
+                cell(1, 0, "홍길동", false),
+                cell(1, 1, "123", false),
+            ],
+        )]);
+        let chunks = build_chunks(&doc, &ChunkOptions::default());
+
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(
+            chunks[0].text.as_bytes(),
+            "| 이름 | 값 |\n| --- | --- |\n| 홍길동 | 123 |".as_bytes()
+        );
+        let serialized = serde_json::to_value(&chunks).unwrap();
+        assert!(serialized[0]["tables"][0].get("label").is_none());
+    }
+
+    #[test]
+    fn nested_tables_are_labeled_referenced_and_emitted_once_in_read_order() {
+        let mut first_nested_cell = cell(0, 0, "중첩-첫째", false);
+        first_nested_cell.paragraphs[0]
+            .controls
+            .push(Control::Table(Box::new(Table {
+                row_count: 1,
+                col_count: 1,
+                cells: vec![cell(0, 0, "깊은값", false)],
+                ..Table::default()
+            })));
+        let first_nested = Table {
+            row_count: 1,
+            col_count: 1,
+            cells: vec![first_nested_cell],
+            ..Table::default()
+        };
+        let second_nested = Table {
+            row_count: 1,
+            col_count: 1,
+            cells: vec![cell(0, 0, "중첩-둘째", false)],
+            ..Table::default()
+        };
+        let third_nested = Table {
+            row_count: 1,
+            col_count: 1,
+            cells: vec![cell(0, 0, "셋째표", false)],
+            ..Table::default()
+        };
+
+        let mut first_outer_cell = cell(0, 0, "바깥 셀", false);
+        first_outer_cell.paragraphs[0]
+            .controls
+            .push(Control::Table(Box::new(first_nested)));
+        first_outer_cell.paragraphs[0]
+            .controls
+            .push(Control::Table(Box::new(second_nested)));
+        let mut empty_outer_cell = cell(1, 0, "", false);
+        empty_outer_cell.paragraphs[0]
+            .controls
+            .push(Control::Table(Box::new(third_nested)));
+
+        let doc = doc_with(vec![para_with_table(
+            2,
+            1,
+            vec![first_outer_cell, empty_outer_cell],
+        )]);
+        let chunks = build_chunks(
+            &doc,
+            &ChunkOptions {
+                max_tokens: 10_000,
+                mode: StructureMode::Auto,
+            },
+        );
+        let text = chunks
+            .iter()
+            .map(|chunk| chunk.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        assert!(text.contains("| 바깥 셀 [표 1-1, 1-2 참조] |"));
+        assert!(text.contains("| [표 1-3 참조] |"));
+        let outer_at = text.find("| 바깥 셀 [표 1-1, 1-2 참조] |").unwrap();
+        let first_label_at = text.find("[표 1-1]\n").unwrap();
+        let first_cell_at = text.find("| 중첩-첫째 [표 1-1-1 참조] |").unwrap();
+        let deep_label_at = text.find("[표 1-1-1]\n").unwrap();
+        let second_label_at = text.find("[표 1-2]\n").unwrap();
+        let third_label_at = text.find("[표 1-3]\n").unwrap();
+        assert!(outer_at < first_label_at);
+        assert!(first_label_at < first_cell_at);
+        assert!(first_cell_at < deep_label_at);
+        assert!(deep_label_at < second_label_at);
+        assert!(second_label_at < third_label_at);
+        for needle in ["바깥 셀", "중첩-첫째", "깊은값", "중첩-둘째", "셋째표"] {
+            assert_eq!(text.matches(needle).count(), 1, "중복 또는 누락: {needle}");
+        }
+
+        let serialized = serde_json::to_value(&chunks).unwrap();
+        let table_refs = serialized[0]["tables"].as_array().unwrap();
+        assert!(table_refs[0].get("label").is_none());
+        assert_eq!(table_refs[1]["label"], "1-1");
+        assert_eq!(table_refs[2]["label"], "1-1-1");
+        assert_eq!(table_refs[3]["label"], "1-2");
+        assert_eq!(table_refs[4]["label"], "1-3");
+    }
+
+    #[test]
+    fn nested_table_parts_repeat_headers_when_the_nested_table_splits() {
+        let mut parent_cell = cell(0, 0, "", false);
+        parent_cell.paragraphs[0]
+            .controls
+            .push(Control::Table(Box::new(Table {
+                row_count: 5,
+                col_count: 1,
+                cells: std::iter::once(cell(0, 0, "중첩머리", true))
+                    .chain((1..=4).map(|row| cell(row, 0, &format!("데이터행{row}"), false)))
+                    .collect(),
+                ..Table::default()
+            })));
+        let doc = doc_with(vec![para_with_table(1, 1, vec![parent_cell])]);
+        let chunks = build_chunks(
+            &doc,
+            &ChunkOptions {
+                max_tokens: 6,
+                mode: StructureMode::Auto,
+            },
+        );
+        let nested_chunks: Vec<_> = chunks
+            .iter()
+            .filter(|chunk| chunk.text.contains("[표 1-1]\n"))
+            .collect();
+
+        assert!(
+            nested_chunks.len() > 1,
+            "중첩 표가 행 단위로 분할되어야 한다"
+        );
+        for row in 1..=4 {
+            let text = chunks
+                .iter()
+                .filter(|chunk| chunk.text.contains(&format!("데이터행{row}")))
+                .map(|chunk| chunk.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert_eq!(text.matches(&format!("데이터행{row}")).count(), 1);
+        }
+        for chunk in nested_chunks {
+            assert!(chunk.text.contains("[표 1-1]\n"));
+            assert!(chunk.text.contains("중첩머리"));
+            assert!(chunk.tables.iter().any(|table| table.header_repeated));
+        }
+    }
+
+    #[test]
+    fn nested_tables_survive_the_sparse_grid_fallback() {
+        let mut parent_cell = cell(0, 0, "", false);
+        parent_cell.paragraphs[0]
+            .controls
+            .push(Control::Table(Box::new(Table {
+                row_count: 1,
+                col_count: 1,
+                cells: vec![cell(0, 0, "fallback-child", false)],
+                ..Table::default()
+            })));
+        let doc = doc_with(vec![para_with_table(500, 500, vec![parent_cell])]);
+        let chunks = build_chunks(&doc, &ChunkOptions::default());
+        let text = chunks
+            .iter()
+            .map(|chunk| chunk.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        assert!(text.contains("(0, 0) [표 1-1 참조]"));
+        assert!(text.contains("[표 1-1]\n"));
+        assert_eq!(text.matches("fallback-child").count(), 1);
     }
 
     #[test]
