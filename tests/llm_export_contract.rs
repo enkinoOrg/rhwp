@@ -247,6 +247,44 @@ fn tables_are_linearized_and_self_contained() {
 }
 
 #[test]
+fn nested_government_document_tables_are_exported_once() {
+    let path =
+        sample("samples/hwpx/opengov/36384689_결재문서본문_화재발생종합보고서(제2026-298호).hwpx");
+    let path = path.to_str().unwrap();
+    let args = [
+        "export-llm",
+        path,
+        "--format",
+        "json",
+        "--mode",
+        "outline",
+        "--max-tokens",
+        "1000000",
+    ];
+    let out = run(&args);
+    assert_eq!(out.status.code(), Some(0), "{}", describe(&args, &out));
+    let envelope: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let mut text = String::new();
+    for chunk in envelope["chunks"].as_array().unwrap() {
+        text.push_str(chunk["text"].as_str().unwrap());
+        text.push('\n');
+    }
+
+    for needle in [
+        "현장대응단-5186",
+        "화재발생종합보고서(제2026-298호)",
+        "화재번호",
+        "조재우",
+    ] {
+        assert_eq!(
+            text.matches(needle).count(),
+            1,
+            "재현 문서의 중첩 표 문구는 한 번만 나와야 한다: {needle}"
+        );
+    }
+}
+
+#[test]
 fn split_tables_repeat_their_header() {
     // 작은 예산으로 큰 표를 강제로 쪼갠 뒤, 모든 파트가 머리 행을 되풀이하는지 본다.
     let path = sample(MANUAL);
